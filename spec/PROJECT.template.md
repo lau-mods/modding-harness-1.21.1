@@ -23,6 +23,14 @@ Mod ID: <FILL_MOD_ID>
 
 ---
 
+## Purpose
+
+誰に、どのようなプレイ体験を提供するModかを記述します。
+
+<FILL_PROJECT_PURPOSE>
+
+---
+
 ## Design principles
 
 このMod全体で維持する仕様上の原則を記述します。
@@ -37,26 +45,6 @@ Mod ID: <FILL_MOD_ID>
 - プレイヤーへ隠れた複雑な状態を持たせない。
 
 実装pattern、class構成、将来拡張のためのarchitectureは記述しません。
-
----
-
-## Scope
-
-### In scope
-
-今回の初期実装に含める範囲です。
-
-- <FILL_SCOPE>
-- <FILL_SCOPE>
-
-### Non-goals
-
-今回実装しない隣接機能を明示します。
-
-- <FILL_NON_GOAL>
-- <FILL_NON_GOAL>
-
-未指定の便利機能、将来向けframework、設定項目、互換機能をAIが追加する許可にはなりません。
 
 ---
 
@@ -239,6 +227,12 @@ Featureとの対応が分かるIDを推奨します。
 
 ---
 
+## Non-goals
+
+今回実装しない機能・範囲: <FILL_NON_GOALS>
+
+---
+
 ## Reference assets
 
 | ID | Resource | Purpose | What to reference | What not to copy |
@@ -246,20 +240,6 @@ Featureとの対応が分かるIDを推奨します。
 | REF-001 | <FILL_PATH_OR_URL> | <FILL_PURPOSE> | <FILL_FEATURES_TO_REFERENCE> | <FILL_EXCLUSIONS> |
 
 参考資料がない場合は「なし」と記述します。
-
----
-
-## Product decisions
-
-壁打ちで確定した、実装中に再判断してほしくない製品上の決定だけを記録します。
-
-| Decision | Choice | Reason | Affects |
-| --- | --- | --- | --- |
-| D-001 | <FILL_DECISION> | <FILL_REASON> | <FILL_FEATURES> |
-
-ここには会話履歴や検討過程を保存しません。
-
-将来Codexが独自判断で覆してほしくない決定だけを残します。
 
 ---
 
