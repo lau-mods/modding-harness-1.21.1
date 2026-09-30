@@ -1,13 +1,17 @@
 {
-  "name": "neoforge-ai-mod-template",
+  "name": "modding-harness-1.21.1",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20 <26" },
-  "scripts": {
-    "test": "node --test harness/test/harness.test.mjs harness/test/multiplayer.test.mjs",
-    "doctor": "node harness/cli.mjs doctor",
-    "validate": "node harness/cli.mjs validate",
-    "develop": "node harness/cli.mjs develop"
+  "engines": {
+    "node": ">=20 <26"
   },
-  "devDependencies": { "@kzheart_/mc-pilot": "0.16.0" }
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "doctor": "node lib/npm-cli.mjs doctor",
+    "validate": "node lib/npm-cli.mjs validate",
+    "develop": "node lib/npm-cli.mjs develop"
+  },
+  "devDependencies": {
+    "@kzheart_/mc-pilot": "0.16.0"
+  }
 }

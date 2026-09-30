@@ -22,8 +22,7 @@ async function fixture(t) {
   }));
   const files = {
     'gradle.properties': 'neo_version=21.1.252\nmod_id=test_input\nmod_version=1\n',
-    'build/libs/test_input-1.jar': 'test archive', 'harness/log-allowlist.json': '[]',
-    'node_modules/@kzheart_/mc-pilot/bin/mct': '',
+    'build/libs/test_input-1.jar': 'test archive',
     '.harness-artifacts/e2e-runtime.json': JSON.stringify({ clients: clients.map(client => client.name), address: '127.0.0.1:25579' }),
     '.harness-artifacts/server/eula.txt': 'eula=true\n',
     '.harness-artifacts/server/server.properties': 'server-ip=127.0.0.1\nserver-port=25579\nonline-mode=false\nlevel-name=world\nmax-players=2\n',

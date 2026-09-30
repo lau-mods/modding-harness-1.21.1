@@ -1,25 +1,49 @@
 #!/usr/bin/env node
-import { fileURLToPath } from 'node:url';
+import { harnessRoot } from './lib/paths.mjs';
+import { createProject } from './lib/create.mjs';
+import { parseArgs } from 'node:util';
 import path from 'node:path';
 import { readFile, writeFile, mkdir, readdir, open, unlink } from 'node:fs/promises';
 import { run, gradleCommand, requireSuccess } from './lib/process.mjs';
 import { loadConfig, save, snapshot, workingChanges, changedSince, classify, assertHarnessUnchanged } from './lib/repository.mjs';
-import { validate, parseSpec, gameTest } from './lib/validate.mjs';
+import { validate, parseSpec, gameTest, harnessValidation, harnessTests } from './lib/validate.mjs';
 import { doctor } from './lib/doctor.mjs';
 import { review, implement } from './lib/agents.mjs';
 import { createSession, setupRuntime } from './lib/mc-pilot.mjs';
 import { acceptanceCoverage, coverageRows } from './lib/coverage.mjs';
 import { developWorkflow, dryRunActions } from './lib/workflow.mjs';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const [command, ...flags] = process.argv.slice(2);
-const playerFlags = flags.filter(flag => flag.startsWith('--players='));
-const playerCount = playerFlags.length ? Number(playerFlags[0].slice('--players='.length)) : 1;
-const allowed = { doctor: [], validate: ['--static', '--build', '--agent-fast'], 'review-harness': [], develop: ['--dry-run'], 'setup-runtime': ['--accept-eula'] };
-if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].includes(flag) && !(command === 'setup-runtime' && /^--players=[1-9]\d*$/.test(flag))) || playerFlags.length > 1 || !Number.isSafeInteger(playerCount) || (command === 'validate' && flags.length > 1)) {
-  console.error('Usage: node harness/cli.mjs doctor | validate [--static|--build|--agent-fast] | review-harness | develop [--dry-run] | setup-runtime [--accept-eula] [--players=N]');
+let command, flags, root, options, target, argumentError;
+try {
+  const parsed = parseArgs({ allowPositionals: true, tokens: true, options: {
+    project: { type: 'string' }, 'harness-ref': { type: 'string' }, 'harness-url': { type: 'string' },
+    static: { type: 'boolean' }, build: { type: 'boolean' }, 'agent-fast': { type: 'boolean' },
+    'dry-run': { type: 'boolean' }, 'accept-eula': { type: 'boolean' }, players: { type: 'string' }
+  } });
+  [command, target] = parsed.positionals;
+  options = parsed.values;
+  const allowed = { doctor: ['project'], validate: ['project', 'static', 'build', 'agent-fast'],
+    'review-harness': [], develop: ['project', 'dry-run'], 'setup-runtime': ['project', 'accept-eula', 'players'],
+    create: ['harness-ref', 'harness-url'] };
+  if (!Object.hasOwn(allowed, command) || Object.keys(options).some(key => !allowed[command].includes(key)) ||
+      parsed.positionals.length !== (command === 'create' ? 2 : 1) ||
+      (command === 'validate' && parsed.tokens.filter(token => token.kind === 'option' && ['static', 'build', 'agent-fast'].includes(token.name)).length > 1) ||
+      parsed.tokens.filter(token => token.kind === 'option' && token.name === 'players').length > 1 ||
+      (options.players !== undefined && (!/^[1-9]\d*$/.test(options.players) || !Number.isSafeInteger(Number(options.players))))) throw new Error('Invalid arguments');
+  flags = Object.keys(options).filter(key => options[key] === true).map(key => '--' + key);
+  root = command === 'review-harness' ? harnessRoot : path.resolve(options.project || process.cwd());
+} catch (error) { argumentError = error; }
+if (argumentError) {
+  console.error(`${argumentError.message}\nUsage: node .harness/cli.mjs doctor | validate [--static|--build|--agent-fast] | develop [--dry-run] | setup-runtime [--accept-eula] [--players=N] [--project PATH]\n       node cli.mjs review-harness | create TARGET [--harness-ref TAG_OR_SHA] [--harness-url URL]`);
   process.exitCode = 2;
+} else if (command === 'create') {
+  try {
+    const result = await createProject(target, { harnessRef: options['harness-ref'], harnessUrl: options['harness-url'] });
+    console.log(JSON.stringify(result, null, 2));
+    console.log('Created project + .harness submodule. Run npm --prefix .harness ci --ignore-scripts in the target, then doctor. Review and commit the initial project before develop.');
+  } catch (error) { console.error(error.message); process.exitCode = 1; }
 } else {
+  const playerCount = Number(options.players || 1);
   const id = `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}`;
   const dir = command === 'validate' && flags.includes('--agent-fast') && process.env.HARNESS_AGENT_FAST_DIR
     ? path.resolve(process.env.HARNESS_AGENT_FAST_DIR)
@@ -28,7 +52,7 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
   let lock;
   const lockPath = path.join(root, '.harness-artifacts/develop.lock');
   try {
-    const config = await loadConfig(root);
+    const config = await loadConfig();
     if (command === 'setup-runtime') {
       lock = await open(lockPath, 'wx'); await lock.writeFile(JSON.stringify({ pid: process.pid, dir }));
       console.log(await setupRuntime(root, run, dir, { acceptEula: flags.includes('--accept-eula'), playerCount }));
@@ -40,7 +64,9 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
       await validate(root, run, dir, { stage: flags.includes('--static') ? 'static' : flags.includes('--build') ? 'build' : 'compile', requireReady: flags.includes('--agent-fast'), agentFast: flags.includes('--agent-fast') });
       console.log('Validation passed');
     } else if (command === 'review-harness') {
-      const validation = await validate(root, run, path.join(dir, 'verification'), { stage: 'static' });
+      const validation = await harnessValidation();
+      if (!validation.ok) throw new Error(validation.errors.join('\n'));
+      await harnessTests(run, path.join(dir, 'verification'));
       let previousFindings = [];
       for (const previous of (await readdir(path.dirname(dir))).filter(name => name !== id).sort().reverse()) {
         try { previousFindings = JSON.parse(await readFile(path.join(path.dirname(dir), previous, 'review.json'), 'utf8')).findings; break; }
@@ -68,7 +94,7 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
           const spec = parseSpec(text);
           const rows = coverageRows(text);
           const missing = spec.criteria.filter(id => !rows.some(row => row.ac === id));
-          if (missing.length) throw new Error(`Specification needs Verification assignments for ${missing.join(', ')}; see spec/README.md`);
+          if (missing.length) throw new Error(`Specification needs Verification assignments for ${missing.join(', ')}; see .harness/docs/ai/SPEC_WRITING.md`);
           const environment = await doctor(root, run);
           await save(path.join(dir, 'doctor.json'), environment);
           const mandatory = environment.checks.filter(check => !/MC Pilot|E2E runtime/.test(check.name));
@@ -88,9 +114,10 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
           const diff = await readFile(path.join(candidateDir, 'diff.patch'), 'utf8');
           const currentSpec = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
           const untracked = requireSuccess(await run('git', ['ls-files', '-z', '--others', '--exclude-standard'], { cwd: root }), 'git untracked files');
+          const { validatedFiles, ...validation } = JSON.parse(await readFile(path.join(candidateDir, 'validation.json'), 'utf8'));
           return review(root, run, config, path.join(candidateDir, 'code-review'), 'code', {
             specificationBeforeEdit: currentSpec === specificationAtStart ? undefined : specificationAtStart,
-            changedFiles: changed, validation: JSON.parse(await readFile(path.join(candidateDir, 'validation.json'), 'utf8')),
+            changedFiles: changed, validation,
             changedFilesAbsentFromDiff: untracked.stdout.split('\0').filter(file => changed.includes(file) && /^(src\/|spec\/|tests\/e2e\/|(?:build|settings)\.gradle$|gradle\.properties$)/.test(file)), diffTruncated: diff.length > 60_000,
             diff: diff.slice(0, 60_000) + (diff.length > 60_000 ? '\n[DIFF TRUNCATED: read affected snapshot source files for the remaining changes]' : '')
           });

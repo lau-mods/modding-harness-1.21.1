@@ -16,7 +16,7 @@ fresh templateにはGameTestがない。autoでは `src/main/java` の `@GameTes
 
 local resource validationはmodelsのparent/textureとblockstatesのmodel参照を確認する。`minecraft`、外部namespace、`#textureVariable`、registry IDはmissing fileと誤認しない。main/generated resourceを対象とし、完全なMinecraft resource compilerを再実装しない。runtime resource errorsは別途logとvisualで確認する。
 
-pure logicの変更は `.../logic/...java` または `src/test/` に置けばcompile/unitに分類される。この分類にMinecraft依存を隠さない。他のJavaは保守的にworld/serverとして扱う。GameTest stageは分類のgameTestがtrueの変更にだけ適用する。screen/renderer/client Java、registry/network/metadataはrestart。dataのうちrecipe/loot_table/tags/advancementだけreloadを許可し、worldgenなど他のdataや未知のsrc変更はrestart。稼働中sessionでpure logicのclassが変われば再起動、test/scenario/docsだけならsessionを再利用する。分類は [repository.mjs](../../harness/lib/repository.mjs) の短い表で管理する。
+pure logicの変更は `.../logic/...java` または `src/test/` に置けばcompile/unitに分類される。この分類にMinecraft依存を隠さない。他のJavaは保守的にworld/serverとして扱う。GameTest stageは分類のgameTestがtrueの変更にだけ適用する。screen/renderer/client Java、registry/network/metadataはrestart。dataのうちrecipe/loot_table/tags/advancementだけreloadを許可し、worldgenなど他のdataや未知のsrc変更はrestart。稼働中sessionでpure logicのclassが変われば再起動、test/scenario/docsだけならsessionを再利用する。分類は [repository.mjs](../../lib/repository.mjs) の短い表で管理する。
 
 ## Qualification evidence
 
