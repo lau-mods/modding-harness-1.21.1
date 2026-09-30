@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir, copyFile, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { save, gitFiles } from './repository.mjs';
+import { save, gitFiles, modPaths, snapshot, assertHarnessUnchanged } from './repository.mjs';
 import { subscriptionEnv, requireSuccess } from './process.mjs';
 
 export function validateReview(value) {
@@ -68,7 +68,7 @@ export async function review(root, runner, config, dir, kind, context = {}) {
   await mkdir(snapshotDir, { recursive: true });
   const files = kind === 'visual' ? [] : (await gitFiles(root, runner)).filter(file => {
     if (kind === 'harness') return /^(?:harness\/|docs\/ai\/|spec\/|tests\/e2e\/|AGENTS\.md$|CLAUDE\.md$|README\.md$|package\.json$|build\.gradle$|settings\.gradle$|gradle\.properties$|\.gitignore$)/.test(file);
-    return /^(src\/|spec\/|tests\/e2e\/|docs\/ai\/CODE_QUALITY\.md$|build\.gradle$|gradle\.properties$)/.test(file);
+    return /^(src\/|spec\/|tests\/e2e\/|docs\/ai\/CODE_QUALITY\.md$|(?:build|settings)\.gradle$|gradle\.properties$)/.test(file);
   }).filter(file => !/\.local\.|\.png$|\.jar$|\.nbt$|\.ogg$|\.zip$/.test(file));
   let total = 0;
   const copied = [];
@@ -117,15 +117,26 @@ export async function review(root, runner, config, dir, kind, context = {}) {
   return finding;
 }
 
+export function codexPermissions() {
+  const paths = ['.', ...modPaths, 'build', '.gradle'];
+  const access = paths.map(file => `${JSON.stringify(file)} = ${JSON.stringify(file === '.' ? 'read' : 'write')}`).join(', ');
+  return ['-c', 'default_permissions="mod-development"', '-c',
+    `permissions = { mod-development = { filesystem = { ":root" = "read", ":tmpdir" = "write", ":slash_tmp" = "write", "~/.gradle" = "write", ":workspace_roots" = { ${access} } }, network = { enabled = false } } }`];
+}
+
 export async function implement(root, runner, config, dir, task) {
   const spec = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
   if (spec.length > 30_000) throw new Error('PROJECT.md exceeds 30 KB; split relevant features into spec/features');
-  const prompt = `Implement the current task in this repository. Follow AGENTS.md. Never launch Minecraft or MC Pilot; the harness owns lifecycle. Do not commit or modify harness policies/budgets to evade checks. Preserve existing user changes. Read only relevant linked feature specs.\n\nSpecification:\n${spec}\n\nCurrent task (structured evidence only):\n${JSON.stringify(task)}`;
+  const prompt = `Implement the current task in this repository. Follow AGENTS.md. Editable project paths: ${modPaths.join(', ')}. All harness files and accepted specifications are read-only. If the task requires changing them, stop and report the blocker. Never launch Minecraft or MC Pilot; the harness owns lifecycle. Do not commit. Preserve existing user changes. Read only relevant linked feature specs.\n\nSpecification:\n${spec}\n\nCurrent task (structured evidence only):\n${JSON.stringify(task)}`;
   await save(path.join(dir, 'task.json'), task);
-  const args = ['exec', '--model', config.models.implementer, '--sandbox', 'workspace-write', '--ephemeral',
+  const before = await snapshot(root, runner);
+  const args = ['--no-daemon', 'exec', '--model', config.models.implementer, '--ephemeral',
+    '--ignore-user-config', '--ignore-rules', '--strict-config', ...codexPermissions(),
     '-c', 'approval_policy="never"', '--cd', root, '--output-last-message', path.join(dir, 'implementation-summary.txt'), '-'];
   await save(path.join(dir, 'command.json'), { executable: 'codex', args });
-  const result = await runner('codex', args, { cwd: root, input: prompt, env: subscriptionEnv(), timeoutMs: 1_800_000 });
-  await save(path.join(dir, 'process.json'), result);
-  requireSuccess(result, 'Codex Sol implementation');
+  try {
+    const result = await runner('codex', args, { cwd: root, input: prompt, env: subscriptionEnv(), timeoutMs: 1_800_000 });
+    await save(path.join(dir, 'process.json'), result);
+    requireSuccess(result, 'Codex Sol implementation');
+  } finally { await assertHarnessUnchanged(root, runner, before); }
 }

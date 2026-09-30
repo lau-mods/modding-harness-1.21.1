@@ -4,7 +4,8 @@ export async function developWorkflow(actions, budgets) {
   const step = async (name, fn) => {
     state.events.push(name);
     await actions.record(state);
-    return fn();
+    try { return await fn(); }
+    finally { await actions.guard?.(); }
   };
   async function candidate(task) {
     while (state.codeAttempts < budgets.codeReviews) {
@@ -12,17 +13,21 @@ export async function developWorkflow(actions, budgets) {
       await step('implementation', () => actions.implement(task));
       try { await step('static-compile-test', () => actions.verify()); }
       catch (error) {
+        if (error.code === 'HARNESS_CHANGED') throw error;
         task = { task: 'Fix deterministic verification failures', failures: [error.message.slice(-8000)] };
         continue;
       }
       state.codeReviews++;
       const review = await step('code-review', () => actions.review());
+      const blocked = review.findings.filter(finding => finding.category === 'protected-input' && finding.severity === 'blocker');
+      if (blocked.length) throw new Error(`Separate harness/spec maintenance required: ${blocked.map(finding => `${finding.file}: ${finding.required_change}`).join('; ')}`);
       if (review.verdict === 'pass') {
         try {
           await step('build', () => actions.build());
           await step('gametest', () => actions.gameTest());
           return;
         } catch (error) {
+          if (error.code === 'HARNESS_CHANGED') throw error;
           task = { task: 'Fix build or GameTest failures', failures: [error.message.slice(-8000)] };
           continue;
         }
@@ -58,7 +63,7 @@ export async function developWorkflow(actions, budgets) {
             result.screenshots.push(...persisted.screenshots);
           }
         } catch (error) {
-          if (['BOOT_BUDGET', 'CLEANUP_FAILED'].includes(error.code)) throw error;
+          if (['BOOT_BUDGET', 'CLEANUP_FAILED', 'HARNESS_CHANGED'].includes(error.code)) throw error;
           result = undefined;
           correction = { task: 'Correct runtime verification failures', failures: [error.message.slice(-8000)] };
         }
@@ -90,6 +95,8 @@ export async function developWorkflow(actions, budgets) {
     // Also cleans partially started sessions; adapter stops only processes it owns.
     try { await actions.stop(); state.sessionStopped = true; }
     catch (error) { state.status = 'failed'; state.sessionStopped = false; state.cleanupError = error.message; }
+    try { await actions.guard?.(); }
+    catch (error) { state.status = 'failed'; state.integrityError = error.message; }
     await actions.record(state);
   }
   return state;

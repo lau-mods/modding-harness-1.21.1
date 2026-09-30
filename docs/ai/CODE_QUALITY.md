@@ -1,6 +1,6 @@
 # Code quality and scope
 
-最小line countではなく、最小concept countを優先する。Minecraft/NeoForge APIを直接使い、目の前の機能を自然に表現する。Codex実装とClaude reviewの両方で適用する。
+Mod、harness、test、scenario、docsに同じ品質基準を適用する。最小line countではなく、最小concept countを優先し、重複する説明を避ける。目の前の機能を直接表現し、ModではMinecraft/NeoForge APIをそのまま使う。Codex実装とClaude reviewの両方で適用する。
 
 - interface、abstract base class、factory、strategy、builder、wrapper、generic abstraction、cache、fallback、configuration/compatibility layerは現在の具体的な必要性がある場合だけ作る。
 - 実装が1つのinterfaceはexternal boundaryでなければ原則不要。NeoForge APIを転送するだけのwrapperも不要。

@@ -22,6 +22,9 @@ export async function doctor(root, runner) {
   add('Gradle wrapper', gradle.ok, gradle.stdout.match(/Gradle [\d.]+/)?.[0] ?? gradle.failure ?? 'wrapper unavailable');
   const codex = await runner('codex', ['--version'], { cwd: root });
   add('Codex CLI', codex.ok, codex.stdout.trim() || codex.failure);
+  const codexHelp = await runner('codex', ['exec', '--help'], { cwd: root });
+  const codexGlobalHelp = await runner('codex', ['--help'], { cwd: root });
+  add('Codex isolated configuration', codexGlobalHelp.stdout.includes('--no-daemon') && ['--ignore-user-config', '--ignore-rules', '--strict-config'].every(flag => codexHelp.stdout.includes(flag)), 'no-daemon and named filesystem permissions required; unsupported profiles fail closed');
   const login = await runner('codex', ['login', 'status'], { cwd: root, env: subscriptionEnv() });
   add('Codex subscription authentication', login.ok && /ChatGPT/i.test(login.stdout + login.stderr), login.ok ? 'ChatGPT subscription required' : 'Run codex login');
   const claude = await runner('claude', ['--version'], { cwd: root });

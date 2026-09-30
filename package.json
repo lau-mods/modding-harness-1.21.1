@@ -2,7 +2,7 @@
   "name": "neoforge-ai-mod-template",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=20 <26" },
   "scripts": {
     "test": "node --test harness/test/harness.test.mjs harness/test/multiplayer.test.mjs",
     "doctor": "node harness/cli.mjs doctor",

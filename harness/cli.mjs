@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { readFile, writeFile, mkdir, readdir, open, unlink } from 'node:fs/promises';
 import { run, gradleCommand, requireSuccess } from './lib/process.mjs';
-import { loadConfig, save, snapshot, workingChanges, changedSince, classify } from './lib/repository.mjs';
+import { loadConfig, save, snapshot, workingChanges, changedSince, classify, assertHarnessUnchanged } from './lib/repository.mjs';
 import { validate, parseSpec, gameTest } from './lib/validate.mjs';
 import { doctor } from './lib/doctor.mjs';
 import { review, implement } from './lib/agents.mjs';
@@ -56,13 +56,9 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
       const initialChanges = await workingChanges(root, run);
       await save(path.join(dir, 'initial-state.json'), { initial, initialChanges });
       let spec, attempt = 0, candidateDir, changed = [], correctionBase, session, scenarios;
-      const assertPolicyUnchanged = async () => {
-        const current = await snapshot(root, run);
-        const protectedChanges = changedSince(initial, current).filter(file => /^(?:harness\/|AGENTS\.md$|CLAUDE\.md$|\.gitignore$|docs\/ai\/|spec\/PROJECT\.md$)/.test(file));
-        if (protectedChanges.length) throw new Error(`Implementation changed protected harness/spec policy: ${protectedChanges.join(', ')}`);
-        return current;
-      };
+      const assertPolicyUnchanged = () => assertHarnessUnchanged(root, run, initial);
       const actions = {
+        guard: assertPolicyUnchanged,
         record: state => save(path.join(dir, 'summary.json'), state),
         async specification() {
           const text = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
@@ -81,7 +77,7 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
           const current = await assertPolicyUnchanged();
           changed = [...new Set([...initialChanges, ...changedSince(initial, current)])];
           await save(path.join(candidateDir, 'changed-files.json'), { files: changed, classification: classify(changed) });
-          const diff = requireSuccess(await run('git', ['diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', 'src', 'spec', 'tests', 'build.gradle', 'gradle.properties'], { cwd: root }), 'git diff');
+          const diff = requireSuccess(await run('git', ['diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', 'src', 'spec', 'tests', 'build.gradle', 'settings.gradle', 'gradle.properties'], { cwd: root }), 'git diff');
           await writeFile(path.join(candidateDir, 'diff.patch'), diff.stdout);
         },
         verify: () => validate(root, run, candidateDir, { requireReady: true }),
@@ -90,7 +86,7 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
           const untracked = requireSuccess(await run('git', ['ls-files', '-z', '--others', '--exclude-standard'], { cwd: root }), 'git untracked files');
           return review(root, run, config, path.join(candidateDir, 'code-review'), 'code', {
             changedFiles: changed, validation: JSON.parse(await readFile(path.join(candidateDir, 'validation.json'), 'utf8')),
-            changedFilesAbsentFromDiff: untracked.stdout.split('\0').filter(file => changed.includes(file) && /^(src\/|spec\/|tests\/e2e\/|build\.gradle$|gradle\.properties$)/.test(file)), diffTruncated: diff.length > 60_000,
+            changedFilesAbsentFromDiff: untracked.stdout.split('\0').filter(file => changed.includes(file) && /^(src\/|spec\/|tests\/e2e\/|(?:build|settings)\.gradle$|gradle\.properties$)/.test(file)), diffTruncated: diff.length > 60_000,
             diff: diff.slice(0, 60_000) + (diff.length > 60_000 ? '\n[DIFF TRUNCATED: read affected snapshot source files for the remaining changes]' : '')
           });
         },

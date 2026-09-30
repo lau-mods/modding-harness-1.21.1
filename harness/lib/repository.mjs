@@ -3,6 +3,17 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { requireSuccess, redact } from './process.mjs';
 
+// Mod implementation inputs; everything else in the repository is read-only.
+export const modPaths = ['src', 'tests/e2e/scenarios', 'build.gradle', 'settings.gradle', 'gradle.properties'];
+export const isModPath = file => modPaths.some(allowed => file === allowed || file.startsWith(allowed + '/'));
+
+export async function assertHarnessUnchanged(root, runner, initial) {
+  const current = await snapshot(root, runner);
+  const changed = changedSince(initial, current).filter(file => !isModPath(file));
+  if (changed.length) throw Object.assign(new Error(`Mod development changed protected files: ${changed.join(', ')}`), { code: 'HARNESS_CHANGED' });
+  return current;
+}
+
 export async function walk(root, relative = '') {
   let entries;
   try { entries = await readdir(path.join(root, relative), { withFileTypes: true }); }

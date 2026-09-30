@@ -15,6 +15,10 @@ Node >=20のES modulesと標準libraryを使う。外部dependencyはMC Pilotだ
 
 Gradle build設定はupstreamから変更しない。POSIXはgradlew、Windowsはjavaから同じwrapper JARのmainを起動する。Windows npm版CodexのshimはNode entry pointへ解決し、Claudeはnative CLIを使う。promptはstdinで渡す。shell quotingに依存しない。
 
+Mod開発の編集範囲は [AGENTS.md](../../AGENTS.md) に定義する。Codexのnamed filesystem profileはrepositoryをread-onlyとし、その範囲とbuild/cache出力だけwriteを許可する。global設定・exec rulesを継承せず、approvalはnever、未対応CLIでは制限を緩めず停止する。各stage後と失敗時にも開始時のhashを照合し、範囲外の変更は修正loopへ渡さず停止する。既存ユーザー変更を基準に含め、自動復元で上書きしない。
+
+hash照合はGitが列挙するfileが対象であり、gitignoreされたruntimeやdependencyは含まない。sandboxはCodexの実行に適用し、後続のGradle/test/scenario codeを隔離するものではないため、それらもreview対象とする。
+
 artifactは `.harness-artifacts/<command>/<run-id>/`。開始hash、既存変更一覧、candidate差分、validation summary、Gradle log、structured review、runtime log抜粋、E2E結果、必要画像、最終summaryを置く。自動commitはしない。raw authentication resultは保存せず、API key系環境変数をagent子processから除外する。artifactも外部共有前に確認する。
 
 レビューsource snapshotは上限800 KB。上限超過時はscopeを絞り、巨大dumpを黙って送らない。spec prompt上限30,000文字、diff上限60,000文字で切り詰めを明示し、untracked filesもmanifestに列挙する。snapshot sourceは変更せずコピーし、process/log出力だけをredactする。画像reviewには承認済みvisual要件・関連ACの本文とリンクされたspec/referencesの資料、必要な画像のみを渡し、sourceは含めない。LLM間で会話履歴やgenerated outputを送り直さない。deterministic resultをAIの主観で上書きしない。

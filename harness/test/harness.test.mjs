@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run, requireSuccess, gradleCommand, subscriptionEnv, redact } from '../lib/process.mjs';
-import { classify, changedSince } from '../lib/repository.mjs';
+import { classify, changedSince, snapshot, assertHarnessUnchanged, isModPath } from '../lib/repository.mjs';
 import { parseSpec, hasGameTests, gameTest, resourceReferences, staticValidation } from '../lib/validate.mjs';
-import { parseReview, validateReview, claudeArgs, visualSpecification } from '../lib/agents.mjs';
+import { parseReview, validateReview, claudeArgs, visualSpecification, implement, codexPermissions } from '../lib/agents.mjs';
 import { localAddress, relevantLogs, mct, logMark, logsAfter, syncPack, prepareOptions, createSession } from '../lib/mc-pilot.mjs';
 import { developWorkflow, dryRunActions } from '../lib/workflow.mjs';
 
@@ -64,6 +64,76 @@ test('process success, failure and missing executable are distinguishable', asyn
   assert.equal(bad.code, 7); assert.throws(() => requireSuccess(bad, 'test'), /bad/);
   const missing = await run('mcmod-command-that-does-not-exist', []);
   assert.equal(missing.ok, false); assert.equal(missing.failure, 'ENOENT');
+});
+
+test('Mod edits preserve existing harness changes and protect all non-project files', async t => {
+  const dir = await temp(t);
+  await mkdir(path.join(dir, 'harness'));
+  await mkdir(path.join(dir, 'src'));
+  await writeFile(path.join(dir, 'harness/config.json'), 'existing user changes');
+  await writeFile(path.join(dir, 'src/input.java'), 'before');
+  const runner = async () => ({ ok: true, stdout: 'harness/config.json\0src/input.java\0README.md\0' });
+  const initial = await snapshot(dir, runner);
+  await writeFile(path.join(dir, 'src/input.java'), 'after');
+  await assertHarnessUnchanged(dir, runner, initial);
+  await writeFile(path.join(dir, 'README.md'), 'unexpected harness documentation');
+  await assert.rejects(() => assertHarnessUnchanged(dir, runner, initial), /protected files: README.md/);
+  await rm(path.join(dir, 'README.md'));
+  await rm(path.join(dir, 'harness/config.json'));
+  await assert.rejects(() => assertHarnessUnchanged(dir, runner, initial), /harness\/config.json/);
+  for (const file of ['harness/new.mjs', 'spec/PROJECT.md', 'package.json', 'tests/e2e/README.md', 'AGENTS.md']) assert.equal(isModPath(file), false);
+  for (const file of ['src/main/new.java', 'tests/e2e/scenarios/new.scenario.mjs', 'build.gradle']) assert.equal(isModPath(file), true);
+});
+
+test('Codex uses a restrictive filesystem profile and checks integrity even on CLI failure', async t => {
+  const dir = await temp(t);
+  await mkdir(path.join(dir, 'spec'));
+  await writeFile(path.join(dir, 'spec/PROJECT.md'), 'accepted specification');
+  await writeFile(path.join(dir, 'AGENTS.md'), 'existing user policy');
+  const runner = async (command, args) => {
+    if (command === 'git') return { ok: true, stdout: 'AGENTS.md\0spec/PROJECT.md\0' };
+    assert.equal(command, 'codex');
+    for (const flag of ['--strict-config', '--ignore-user-config', '--ignore-rules']) assert.ok(args.includes(flag));
+    assert.ok(!args.includes('--sandbox')); assert.ok(args.includes('approval_policy="never"'));
+    const profile = codexPermissions().at(-1);
+    assert.match(profile, /"\." = "read"/); assert.match(profile, /"src" = "write"/);
+    assert.doesNotMatch(profile, /"harness" = "write"/);
+    await writeFile(path.join(dir, 'AGENTS.md'), 'changed by a faulty runner');
+    return { ok: false, code: 1, stdout: '', stderr: 'CLI failed' };
+  };
+  await assert.rejects(() => implement(dir, runner, { models: { implementer: 'gpt-6-sol' } }, path.join(dir, 'artifacts'), { task: 'test' }), /protected files: AGENTS.md/);
+  assert.equal(await readFile(path.join(dir, 'AGENTS.md'), 'utf8'), 'changed by a faulty runner');
+});
+
+test('harness mutation at a stage boundary stops instead of asking Codex to repair it', async () => {
+  const actions = dryRunActions(async () => {});
+  let dirty = false;
+  actions.verify = async () => { dirty = true; };
+  actions.guard = async () => { if (dirty) throw Object.assign(new Error('Protected harness changed'), { code: 'HARNESS_CHANGED' }); };
+  const state = await developWorkflow(actions, budgets);
+  assert.equal(state.status, 'failed'); assert.equal(state.codeAttempts, 1);
+  assert.equal(state.codeReviews, 0); assert.equal(state.boots, 0);
+  assert.match(state.error, /Protected harness/);
+});
+
+test('a final integrity failure preserves the original failure', async () => {
+  const actions = dryRunActions(async () => {});
+  actions.review = async () => { throw new Error('review service unavailable'); };
+  let stopped = false;
+  actions.stop = async () => { stopped = true; };
+  actions.guard = async () => { if (stopped) throw new Error('Protected file changed during cleanup'); };
+  const state = await developWorkflow(actions, budgets);
+  assert.equal(state.status, 'failed'); assert.equal(state.error, 'review service unavailable');
+  assert.equal(state.integrityError, 'Protected file changed during cleanup');
+});
+
+test('protected input findings require separate maintenance, never a Mod correction', async () => {
+  const actions = dryRunActions(async () => {});
+  actions.review = async () => ({ ...fail, findings: [{ ...finding, category: 'protected-input', severity: 'blocker', file: 'spec/PROJECT.md' }] });
+  const state = await developWorkflow(actions, budgets);
+  assert.equal(state.status, 'failed'); assert.equal(state.codeAttempts, 1);
+  assert.equal(state.codeReviews, 1); assert.equal(state.boots, 0);
+  assert.match(state.error, /Separate harness\/spec maintenance required/);
 });
 
 test('process timeout, output cap, abort, stdin and literal argv', async () => {
