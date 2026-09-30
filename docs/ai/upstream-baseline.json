@@ -1,0 +1,19 @@
+{
+  "recordedAt": "2026-09-30",
+  "commit": "0d385327b15a9497991c0cc032eb63bc18aa3cf7",
+  "commitSubject": "Update MDK with new output from mod generator (#76)",
+  "branch": "main",
+  "remote": "git@github.com:lau-mods/MDK-1.21.1-ModDevGradle.git",
+  "officialUpstream": "https://github.com/NeoForgeMDKs/MDK-1.21.1-ModDevGradle",
+  "initialWorkingTree": "clean",
+  "java": "Temurin 21.0.11+10-LTS",
+  "gradle": "9.2.1 (wrapper)",
+  "node": "26.0.0",
+  "modDevGradle": "2.0.147",
+  "minecraft": "1.21.1",
+  "neoForge": "21.1.252",
+  "parchment": "2024.11.17",
+  "structure": ["build.gradle", "settings.gradle", "gradle.properties", "gradlew", "gradlew.bat", "gradle/wrapper", "src/main/java/com/example/examplemod", "src/main/resources/assets/examplemod/lang", "src/main/templates/META-INF/neoforge.mods.toml", ".github/workflows/build.yml", "TEMPLATE_LICENSE.txt"],
+  "preservedRuns": ["client", "server", "gameTestServer", "data"],
+  "observedTools": { "codex": "0.155.0-alpha.16.3", "claude": "2.1.285", "mcPilotOnPath": false, "mcPilotProjectDependency": "0.16.0" }
+}

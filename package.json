@@ -1,0 +1,13 @@
+{
+  "name": "neoforge-ai-mod-template",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test harness/test/harness.test.mjs",
+    "doctor": "node harness/cli.mjs doctor",
+    "validate": "node harness/cli.mjs validate",
+    "develop": "node harness/cli.mjs develop"
+  },
+  "devDependencies": { "@kzheart_/mc-pilot": "0.16.0" }
+}

@@ -21,5 +21,20 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install MC Pilot without global setup scripts
+        run: npm ci --ignore-scripts
+
+      - name: Validate harness and resources
+        run: node harness/cli.mjs validate --static
+
+      - name: Exercise development orchestration
+        run: node harness/cli.mjs develop --dry-run
+
       - name: Build with Gradle
         run: ./gradlew build
