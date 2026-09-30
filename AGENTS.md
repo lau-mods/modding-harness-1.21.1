@@ -13,7 +13,7 @@ Read only the policy relevant to the task:
 
 Run safe local static validation, Gradle compile/build/unit tests and harness self-tests without asking. The harness alone manages Minecraft lifecycle: implementers must never start a client, server, GameTest server, or MC Pilot lifecycle command. Prepare scenarios and wait for the harness gates.
 
-Mod development may edit only `src/`, `tests/e2e/scenarios/`, `build.gradle`, `settings.gradle`, and `gradle.properties`. The harness and accepted specifications are immutable during development, including when fixing failures. Report a blocker if they need changes. Harness maintenance is a separate, explicitly requested task.
+Do not edit the harness during Mod development, including when fixing failures. Report a blocker if it needs changes; harness maintenance is a separate, explicitly requested task.
 
 Use the sequence specification → implementation → static/resource checks → compile/test → code review → fixes → build → applicable GameTest → batched E2E → visual review. Finish a candidate before booting Minecraft. Prefer resource reload when safe; Java/registry/network changes require restart. Never use the client as a debugger for ordinary code iteration.
 

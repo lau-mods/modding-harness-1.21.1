@@ -127,7 +127,7 @@ export function codexPermissions() {
 export async function implement(root, runner, config, dir, task) {
   const spec = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
   if (spec.length > 30_000) throw new Error('PROJECT.md exceeds 30 KB; split relevant features into spec/features');
-  const prompt = `Implement the current task in this repository. Follow AGENTS.md. Editable project paths: ${modPaths.join(', ')}. All harness files and accepted specifications are read-only. If the task requires changing them, stop and report the blocker. Never launch Minecraft or MC Pilot; the harness owns lifecycle. Do not commit. Preserve existing user changes. Read only relevant linked feature specs.\n\nSpecification:\n${spec}\n\nCurrent task (structured evidence only):\n${JSON.stringify(task)}`;
+  const prompt = `Implement the current task in this repository. Follow AGENTS.md. Editable project paths: ${modPaths.join(', ')}. All harness files are read-only; stop and report a blocker if they need changes. Never launch Minecraft or MC Pilot; the harness owns lifecycle. Do not commit. Preserve existing user changes. Read only relevant linked feature specs.\n\nSpecification:\n${spec}\n\nCurrent task (structured evidence only):\n${JSON.stringify(task)}`;
   await save(path.join(dir, 'task.json'), task);
   const before = await snapshot(root, runner);
   const args = ['--no-daemon', 'exec', '--model', config.models.implementer, '--ephemeral',

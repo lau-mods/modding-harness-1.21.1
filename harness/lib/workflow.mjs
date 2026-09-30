@@ -20,7 +20,7 @@ export async function developWorkflow(actions, budgets) {
       state.codeReviews++;
       const review = await step('code-review', () => actions.review());
       const blocked = review.findings.filter(finding => finding.category === 'protected-input' && finding.severity === 'blocker');
-      if (blocked.length) throw new Error(`Separate harness/spec maintenance required: ${blocked.map(finding => `${finding.file}: ${finding.required_change}`).join('; ')}`);
+      if (blocked.length) throw new Error(`Harness maintenance or user decision required: ${blocked.map(finding => `${finding.file}: ${finding.required_change}`).join('; ')}`);
       if (review.verdict === 'pass') {
         try {
           await step('build', () => actions.build());

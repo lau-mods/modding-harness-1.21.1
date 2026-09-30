@@ -15,7 +15,7 @@ Node >=20のES modulesと標準libraryを使う。外部dependencyはMC Pilotだ
 
 Gradle build設定はupstreamから変更しない。POSIXはgradlew、Windowsはjavaから同じwrapper JARのmainを起動する。Windows npm版CodexのshimはNode entry pointへ解決し、Claudeはnative CLIを使う。promptはstdinで渡す。shell quotingに依存しない。
 
-Mod開発の編集範囲は [AGENTS.md](../../AGENTS.md) に定義する。Codexのnamed filesystem profileはrepositoryをread-onlyとし、その範囲とbuild/cache出力だけwriteを許可する。global設定・exec rulesを継承せず、approvalはnever、未対応CLIでは制限を緩めず停止する。各stage後と失敗時にも開始時のhashを照合し、範囲外の変更は修正loopへ渡さず停止する。既存ユーザー変更を基準に含め、自動復元で上書きしない。
+Codexのnamed filesystem profileはrepositoryをread-onlyとし、[repository.mjs](../../harness/lib/repository.mjs) の `modPaths` とbuild/cache出力だけwriteを許可する。global設定・exec rulesを継承せず、approvalはnever、未対応CLIでは制限を緩めず停止する。各stage後と失敗時にも開始時のhashを照合し、範囲外の変更は修正loopへ渡さず停止する。既存ユーザー変更を基準に含め、自動復元で上書きしない。
 
 hash照合はGitが列挙するfileが対象であり、gitignoreされたruntimeやdependencyは含まない。sandboxはCodexの実行に適用し、後続のGradle/test/scenario codeを隔離するものではないため、それらもreview対象とする。
 

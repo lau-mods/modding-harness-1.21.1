@@ -10,7 +10,7 @@ visual requirementsには対象AC、色・形・pixel style・サイズ・GUI配
 
 persistenceは保存単位、寿命、破壊時、再起動時、既存world migrationを説明する。multiplayerはserver authoritativeな結果、同時操作、同期、権限、client/server双方への導入要否を定める。compatibilityは対象loader/versionと特別に必要な他Mod/resource packを列挙し、対象外も明記する。
 
-**Non-goalsを空にしない。** 「自動化しない」「GUIなし」「他loader対応なし」「設定screenなし」など、隣接するが今回実装しない機能を挙げる。AIは未指定の便利機能やgeneral frameworkを発明しない。仕様変更が必要ならdevelopの外で仕様を更新してから再実行する。
+**Non-goalsを空にしない。** 「自動化しない」「GUIなし」「他loader対応なし」「設定screenなし」など、隣接するが今回実装しない機能を挙げる。AIは未指定の便利機能やgeneral frameworkを発明しない。
 
 unresolved questionsは、本当に判断不能でobservable behaviorに影響する事項だけを書く。実装手段の通常判断はagentに任せる。未解決の製品判断が残るなら `Status: draft` を維持する。readyへの変更は仕様の合意を表し、agentは勝手に変更しない。
 

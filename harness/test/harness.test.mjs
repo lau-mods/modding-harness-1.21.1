@@ -81,8 +81,8 @@ test('Mod edits preserve existing harness changes and protect all non-project fi
   await rm(path.join(dir, 'README.md'));
   await rm(path.join(dir, 'harness/config.json'));
   await assert.rejects(() => assertHarnessUnchanged(dir, runner, initial), /harness\/config.json/);
-  for (const file of ['harness/new.mjs', 'spec/PROJECT.md', 'package.json', 'tests/e2e/README.md', 'AGENTS.md']) assert.equal(isModPath(file), false);
-  for (const file of ['src/main/new.java', 'tests/e2e/scenarios/new.scenario.mjs', 'build.gradle']) assert.equal(isModPath(file), true);
+  for (const file of ['harness/new.mjs', 'package.json', 'tests/e2e/README.md', 'AGENTS.md']) assert.equal(isModPath(file), false);
+  for (const file of ['spec/PROJECT.md', 'spec/features/input.md', 'spec/PROJECT.template.md', 'spec/README.md', 'src/main/new.java', 'tests/e2e/scenarios/new.scenario.mjs', 'build.gradle']) assert.equal(isModPath(file), true);
 });
 
 test('Codex uses a restrictive filesystem profile and checks integrity even on CLI failure', async t => {
@@ -97,12 +97,31 @@ test('Codex uses a restrictive filesystem profile and checks integrity even on C
     assert.ok(!args.includes('--sandbox')); assert.ok(args.includes('approval_policy="never"'));
     const profile = codexPermissions().at(-1);
     assert.match(profile, /"\." = "read"/); assert.match(profile, /"src" = "write"/);
+    assert.match(profile, /"spec" = "write"/);
     assert.doesNotMatch(profile, /"harness" = "write"/);
     await writeFile(path.join(dir, 'AGENTS.md'), 'changed by a faulty runner');
     return { ok: false, code: 1, stdout: '', stderr: 'CLI failed' };
   };
   await assert.rejects(() => implement(dir, runner, { models: { implementer: 'gpt-6-sol' } }, path.join(dir, 'artifacts'), { task: 'test' }), /protected files: AGENTS.md/);
   assert.equal(await readFile(path.join(dir, 'AGENTS.md'), 'utf8'), 'changed by a faulty runner');
+});
+
+test('an implementation can align PROJECT.md with user instructions while preserving the harness', async t => {
+  const dir = await temp(t);
+  await mkdir(path.join(dir, 'spec'));
+  await writeFile(path.join(dir, 'spec/PROJECT.md'), specification);
+  await writeFile(path.join(dir, 'AGENTS.md'), 'existing user policy');
+  const task = { task: 'User instruction: rename criterion AC-A to AC-INPUT consistently.' };
+  const runner = async (command, args, options) => {
+    if (command === 'git') return { ok: true, stdout: 'AGENTS.md\0spec/PROJECT.md\0' };
+    assert.equal(command, 'codex');
+    assert.ok(options.input.includes(task.task));
+    await writeFile(path.join(dir, 'spec/PROJECT.md'), specification.replaceAll('AC-A', 'AC-INPUT'));
+    return { ok: true, code: 0, stdout: '', stderr: '' };
+  };
+  await implement(dir, runner, { models: { implementer: 'gpt-6-sol' } }, path.join(dir, 'artifacts'), task);
+  assert.equal(await readFile(path.join(dir, 'spec/PROJECT.md'), 'utf8'), specification.replaceAll('AC-A', 'AC-INPUT'));
+  assert.equal(await readFile(path.join(dir, 'AGENTS.md'), 'utf8'), 'existing user policy');
 });
 
 test('harness mutation at a stage boundary stops instead of asking Codex to repair it', async () => {
@@ -127,13 +146,13 @@ test('a final integrity failure preserves the original failure', async () => {
   assert.equal(state.integrityError, 'Protected file changed during cleanup');
 });
 
-test('protected input findings require separate maintenance, never a Mod correction', async () => {
+test('harness maintenance findings stop instead of triggering a Mod correction', async () => {
   const actions = dryRunActions(async () => {});
-  actions.review = async () => ({ ...fail, findings: [{ ...finding, category: 'protected-input', severity: 'blocker', file: 'spec/PROJECT.md' }] });
+  actions.review = async () => ({ ...fail, findings: [{ ...finding, category: 'protected-input', severity: 'blocker', file: 'harness/config.json' }] });
   const state = await developWorkflow(actions, budgets);
   assert.equal(state.status, 'failed'); assert.equal(state.codeAttempts, 1);
   assert.equal(state.codeReviews, 1); assert.equal(state.boots, 0);
-  assert.match(state.error, /Separate harness\/spec maintenance required/);
+  assert.match(state.error, /Harness maintenance or user decision required/);
 });
 
 test('process timeout, output cap, abort, stdin and literal argv', async () => {
@@ -459,7 +478,14 @@ test('AC coverage validates reverse scenario/visual/persistence mappings', async
     await writeFile(path.join(dir, `tests/e2e/scenarios/${id}.scenario.mjs`), `export default {id:${JSON.stringify(id)},acceptanceCriteria:${JSON.stringify(ac)},phase:${JSON.stringify(phase)},visual:${visual},players:2,verification:['multiplayer'],setup:async()=>{},actions:async()=>{},assertions:async()=>{},cleanup:async()=>{},screenshots:${visual ? "[{id:'point',criteria:['Synthetic visual requirement.'],prepare:async()=>{},assertState:async()=>{}}]" : '[]'}}`);
   }
   assert.equal((await acceptanceCoverage(dir, path.join(dir, 'evidence'))).percent, 100);
-  await writeFile(path.join(dir, 'spec/PROJECT.md'), specification.replace('case-a/point', 'case-a/missing'));
+  const updatedSpec = specification.replaceAll('AC-A', 'AC-INPUT');
+  await writeFile(path.join(dir, 'spec/PROJECT.md'), updatedSpec);
+  const scenarioFile = path.join(dir, 'tests/e2e/scenarios/case-a.scenario.mjs');
+  await writeFile(scenarioFile, (await readFile(scenarioFile, 'utf8')).replaceAll('AC-A', 'AC-INPUT'));
+  const updated = await acceptanceCoverage(dir, path.join(dir, 'evidence'));
+  assert.equal(updated.percent, 100);
+  assert.deepEqual(updated.scenarios.find(s => s.id === 'case-a').acceptanceCriteria, ['AC-INPUT', 'AC-D']);
+  await writeFile(path.join(dir, 'spec/PROJECT.md'), updatedSpec.replace('case-a/point', 'case-a/missing'));
   await assert.rejects(() => acceptanceCoverage(dir, path.join(dir, 'evidence')), /visual evidence/);
 });
 

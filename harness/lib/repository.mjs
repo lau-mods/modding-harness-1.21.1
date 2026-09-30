@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { requireSuccess, redact } from './process.mjs';
 
 // Mod implementation inputs; everything else in the repository is read-only.
-export const modPaths = ['src', 'tests/e2e/scenarios', 'build.gradle', 'settings.gradle', 'gradle.properties'];
+export const modPaths = ['spec', 'src', 'tests/e2e/scenarios', 'build.gradle', 'settings.gradle', 'gradle.properties'];
 export const isModPath = file => modPaths.some(allowed => file === allowed || file.startsWith(allowed + '/'));
 
 export async function assertHarnessUnchanged(root, runner, initial) {

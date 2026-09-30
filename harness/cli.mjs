@@ -7,7 +7,7 @@ import { loadConfig, save, snapshot, workingChanges, changedSince, classify, ass
 import { validate, parseSpec, gameTest } from './lib/validate.mjs';
 import { doctor } from './lib/doctor.mjs';
 import { review, implement } from './lib/agents.mjs';
-import { createSession, loadScenarios, setupRuntime } from './lib/mc-pilot.mjs';
+import { createSession, setupRuntime } from './lib/mc-pilot.mjs';
 import { acceptanceCoverage, coverageRows } from './lib/coverage.mjs';
 import { developWorkflow, dryRunActions } from './lib/workflow.mjs';
 
@@ -54,15 +54,16 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
       lock = await open(lockPath, 'wx'); await lock.writeFile(JSON.stringify({ pid: process.pid, dir }));
       const initial = await snapshot(root, run);
       const initialChanges = await workingChanges(root, run);
-      await save(path.join(dir, 'initial-state.json'), { initial, initialChanges });
-      let spec, attempt = 0, candidateDir, changed = [], correctionBase, session, scenarios;
+      const specificationAtStart = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
+      await save(path.join(dir, 'initial-state.json'), { initial, initialChanges, specificationAtStart });
+      let attempt = 0, candidateDir, changed = [], correctionBase, session, scenarios;
       const assertPolicyUnchanged = () => assertHarnessUnchanged(root, run, initial);
       const actions = {
         guard: assertPolicyUnchanged,
         record: state => save(path.join(dir, 'summary.json'), state),
         async specification() {
           const text = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
-          spec = parseSpec(text);
+          const spec = parseSpec(text);
           const rows = coverageRows(text);
           const missing = spec.criteria.filter(id => !rows.some(row => row.ac === id));
           if (missing.length) throw new Error(`Specification needs Verification assignments for ${missing.join(', ')}; see spec/README.md`);
@@ -83,8 +84,10 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
         verify: () => validate(root, run, candidateDir, { requireReady: true }),
         async review() {
           const diff = await readFile(path.join(candidateDir, 'diff.patch'), 'utf8');
+          const currentSpec = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
           const untracked = requireSuccess(await run('git', ['ls-files', '-z', '--others', '--exclude-standard'], { cwd: root }), 'git untracked files');
           return review(root, run, config, path.join(candidateDir, 'code-review'), 'code', {
+            specificationBeforeEdit: currentSpec === specificationAtStart ? undefined : specificationAtStart,
             changedFiles: changed, validation: JSON.parse(await readFile(path.join(candidateDir, 'validation.json'), 'utf8')),
             changedFilesAbsentFromDiff: untracked.stdout.split('\0').filter(file => changed.includes(file) && /^(src\/|spec\/|tests\/e2e\/|(?:build|settings)\.gradle$|gradle\.properties$)/.test(file)), diffTruncated: diff.length > 60_000,
             diff: diff.slice(0, 60_000) + (diff.length > 60_000 ? '\n[DIFF TRUNCATED: read affected snapshot source files for the remaining changes]' : '')
@@ -124,7 +127,7 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
           const classification = classify(files);
           if (files.some(file => !current[file])) classification.restart = true;
           try { await session.ready(); } catch { classification.restart = true; }
-          scenarios = await loadScenarios(root, spec.criteria);
+          scenarios = (await acceptanceCoverage(root, candidateDir)).scenarios;
           if (!scenarios.length || (classify(changed).visual && !scenarios.some(scenario => scenario.visual))) throw new Error('Required E2E/visual coverage was removed during correction');
           if (scenarios.some(s => (s.players ?? 1) > session.playerCount)) throw new Error('Correction requires more clients; prepare the runtime and start a new development run');
           return classification;

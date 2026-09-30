@@ -82,4 +82,4 @@ Mojang mappingの利用条件は [NeoFormのlicense reference](https://github.co
 
 ハーネスはユーザー仕様とscenarioを入力として、検証・review・Minecraft lifecycleを管理します。Mod固有のID、生成ファイル名、操作、期待値はprojectの仕様・source・resource・scenarioだけに置きます。検証用Modの専用runnerとテストもハーネス本体から分離し、それらがなくても共通self-testとdry-runを実行できます。実機qualificationの手順と結果は検証用projectとそのartifactsで管理します。
 
-Mod開発中はharnessを変更できません。[AGENTS.md](AGENTS.md)の編集範囲をCodexのfilesystem権限とstageごとのhash照合で検査します。harnessに修正が必要な場合は停止し、別の保守作業として扱います。
+Mod開発中はharnessを変更できません。Codexのfilesystem権限とstageごとのhash照合で保護します（[仕組み](docs/ai/HARNESS_ARCHITECTURE.md)）。harnessに修正が必要な場合は停止し、別の保守作業として扱います。
