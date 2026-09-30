@@ -21,7 +21,7 @@ visual criteriaがあるscenarioだけ画像を撮る。MC Pilot query/Node asse
 
 resource reloadは専用loose packへassetsを同期しF3+T、dataは専用datapackへ同期し `/reload`。packはharnessが初回起動前に作成・有効化する。所有markerのある生成assets/dataだけを置換し、user packやworldは削除しない。reload完了と期待stateはscenarioのcondition wait/assertで確認する。JARを書き換えただけで反映されたと仮定しない。削除・Java・registry・network・mod metadataはrestart。所有markerのない同名packがあれば引き取らず失敗する。
 
-各scenario開始時にserver/client logのbyte offsetを記録する。MC Pilotにはserver logs-markがあるが、NeoForge serverを管理対象にできないためこのadapterはbyte offsetを使う。新しいwindowだけ走査しerror/exception/fatal/resource load失敗を抽出する。allowlistは [log-allowlist.json](../../harness/log-allowlist.json) のexact messageと理由のみ。広いregexでwarning/errorを隠さない。
+各scenario開始時にserver/client logのbyte offsetを記録する。MC Pilotにはserver logs-markがあるが、NeoForge serverを管理対象にできないためこのadapterはbyte offsetを使う。新しいwindowだけ走査しerror/exception/fatal/resource load失敗を抽出する。allowlistは [log-allowlist.json](../../log-allowlist.json) のexact messageと理由のみ。広いregexでwarning/errorを隠さない。
 
 Opusは必要な画像とACだけを見る。missing texture/model、magenta/black、UV、z-fighting、transparency、GUI clipping/overlap、text overflow、slot位置、item/block向き、placeholderをfeature固有基準に照らして検査する。visualが不要な仕様に装飾的なscreenshot reviewを追加しない。
 

@@ -1,86 +1,157 @@
-# NeoForge AI Mod development template
+# Modding harness — Minecraft 1.21.1
 
-Minecraft Java Edition **1.21.1 / NeoForge / ModDevGradle / Java 21**の開発テンプレートです。`spec/PROJECT.md` に具体的な仕様を書き、Codex Solで実装、Claude Opusで独立review、Gradle/GameTest/MC Pilotで段階的に検証します。元のMDKのJava source、build設定、4つのrun構成は維持しています。
+Minecraft Java **1.21.1 / NeoForge / ModDevGradle / Java 21** 用の共通開発基盤です。Codex Solで実装し、Claude Opusで独立review、Gradle/GameTest/MC Pilotで段階的に検証します。新規作成も既存projectへの導入も、同じ **project-owned files + `.harness` Git submodule** になります。
+
+## Architecture and ownership
+
+```text
+modding-harness-1.21.1/       system-repository/
+├── cli.mjs                 ├── .harness/  ← このrepositoryのsubmodule
+├── package{,-lock}.json     ├── src/
+├── config.json             ├── spec/
+├── lib/                    ├── tests/e2e/scenarios/
+├── test/                   ├── build.gradle, settings.gradle
+├── prompts/, schemas/      ├── gradle.properties, gradle/, gradlew{,.bat}
+├── log-allowlist.json       ├── AGENTS.md
+├── docs/                   └── その他project固有ファイル
+└── template/
+```
+
+| Ownership | 内容 | 更新方法 |
+| --- | --- | --- |
+| runtime-owned | CLI、lib、self-tests、npm dependencies、config、prompts/schema、共通docs/agent policy、review・validation・Minecraft lifecycle | `.harness` のcommit pointerを明示更新 |
+| template-owned | `template/` 内のGradle、MDK sample source/resources、draft spec、scenario例、AGENTS/README、ignore/attributes、CI、MDK license | harness側で将来の新規作成用に変更 |
+| project-owned | materialize済みの上記ファイル、既存systemのsource/spec/Gradle/AGENTS、独自設定・resources | system側で独立して変更 |
+
+`template/` は **createでだけ使用** します。生成後の同期・上書きは行いません。通常のdoctor/validate/develop/reviewには不要です。runtimeは生成経路を記録・分岐しません。harness rootは自身のmodule URL（`lib/paths.mjs`）から、project rootはCLI実行時のcwd、または `--project PATH` から決めます。project rootで実行してください。subdirectoryからの暗黙的な親探索はありません。
+
+Node dependenciesはharness内の `package.json` / lockfileで管理し、system rootにnpm packageを追加しません。
 
 ## Prerequisites
 
-- 64-bit JDK 21、Git、Node.js 22 LTS（harness自体は>=20。MC PilotのNode26互換問題はE2E手順参照）、npm。
-- ChatGPT subscriptionで認証したCodex CLI。
-- Claude Pro等のsubscriptionで認証したnative Claude Code。Opusと現在のheadless/structured/safe-mode flagsを使えること。
-- E2Eにはdesktop/OpenGL、MC Pilotと同じNeoForge versionの専用client/server、Minecraft EULAへの同意が必要です。
+- Git、64-bit JDK 21、Node.js 22 LTS、npm。harnessのengine範囲は>=20 <26。
+- `develop`: ChatGPT subscriptionで認証したCodex CLIと、claude.ai subscriptionで認証したnative Claude Code（Opus）。API keyは使用しません。
+- 実E2E: desktop/OpenGL環境、専用NeoForge/MC Pilot runtime。[E2E手順](docs/ai/E2E.md)を参照。
 
-## Initial setup
+## 既存systemへの導入
 
-clone後、このdirectoryをIDEへ開きます。IntelliJ IDEA/Eclipseなどの通常のMDK開発も可能です。
+既存systemのrootで実行します。source tree、履歴、tag、release、Gradle、spec、AGENTSをtemplate版に置き換える必要はありません。
 
-```text
-npm ci --ignore-scripts
-codex login
-codex login status
-claude auth login
-claude auth status
-node harness/cli.mjs doctor
-node harness/cli.mjs validate --build
-node harness/cli.mjs develop --dry-run
+```sh
+git submodule add <harness-repository-url> .harness
+# 利用するreleaseを選び、detached HEADで固定
+git -C .harness checkout --detach <version-tag-or-commit>
+npm --prefix .harness ci --ignore-scripts
+node .harness/cli.mjs doctor
+node .harness/cli.mjs validate --build
+git add .gitmodules .harness
+# 内容を確認してsystem側でcommit
 ```
 
-認証は各CLIのブラウザflowで行います。API keyをrepositoryへ置かず、harnessがglobal設定を書き換えることもありません。sandboxからkeychainが読めない場合、doctorが未認証と表示することがあります。通常のローカルterminalで再確認してください。
+`doctor` は不足を具体的に報告します。project contractは `AGENTS.md`、`spec/PROJECT.md`、`build.gradle`、`settings.gradle`、`gradle.properties`、Gradle wrapper一式です。Gradle metadataには `minecraft_version=1.21.1`、`neo_version`、`mod_id`、`mod_version` が必要です。標準source/resource配置は `src/main/`、生成resourcesは `src/generated/resources/`、scenarioは `tests/e2e/scenarios/`。E2E配備JARは `build/libs/<mod_id>-<mod_version>.jar` を使用します。
 
-MC Pilotは唯一のNode devDependencyで0.16.0に固定しています。`--ignore-scripts` はglobal skill install/syncを避けるためです。server/client初期setupと現在のloader制約は [tests/e2e/README](tests/e2e/README.md) を参照してください。doctorは不足を報告し、installやMinecraft起動は行いません。
+`doctor` とcompile/build validationは `gradlew tasks --all` で `classes`、`test`、`build`、`runClient`、`runServer`、`runGameTestServer`、`runData` の存在を検査します。task一覧取得だけでMinecraftは起動しません。不足するtaskやmetadataは既存projectの設定に追加してください。harnessがGradleを上書きすることはありません。
 
-## Write specifications and develop
+`spec/PROJECT.md` の形式は [SPEC_WRITING](docs/ai/SPEC_WRITING.md)。既存 `AGENTS.md` には必要に応じ `.harness/docs/ai/AGENT_POLICY.md` への参照を追加できます。既存文書の置換は不要です。`develop` の実装agentには共通policyも明示します。artifactの `.harness-artifacts/` はsystem側の `.gitignore` に追加してください。
 
-[spec/README](spec/README.md)と[記入欄](spec/PROJECT.template.md)に沿って [spec/PROJECT.md](spec/PROJECT.md) を編集します。目的、機能、AC、visual、保存、multiplayer、compatibility、**Non-goals**、参考資料を具体化し、`Status: ready` にします。未記入では実developは拒否します。
+## 新規systemの作成
 
-```text
-node harness/cli.mjs develop
+```sh
+git clone <harness-repository-url> modding-harness-1.21.1
+cd modding-harness-1.21.1
+git checkout --detach <release-tag>
+node cli.mjs create ../new-system
+cd ../new-system
+npm --prefix .harness ci --ignore-scripts
+node .harness/cli.mjs doctor
+node .harness/cli.mjs validate --build
+git add .
+git commit -m "chore: initialize system with modding harness"
 ```
 
-CodexはspecのMod IDに合わせMDK sampleを更新し、機能と必要なtest/scenarioを実装します。レビューはClaudeがread-onlyで行い、指摘はstructured findingsとしてCodexへ返します。client lifecycleはharnessだけが管理します。普通のIDE runは人間によるdebug用として引き続き利用できます。
+`create` はGitとNode標準libraryだけで動作します。空directory（`.git` のみ存在する独立repositoryも可）をtargetにします。非空projectは拒否し、既存導入手順へ案内します。
 
-## Commands and validation
+1. harnessのremoteとrevisionを解決し、一時checkoutで取得します。
+2. **そのrevisionの** `template/` をtargetへmaterializeします。directory名からGradleの `rootProject.name` を設定します。Mod ID等のMDK sample値とdraft specは保持し、ユーザー仕様確定時に変更します。
+3. 必要なら `git init` します。既存の空Git repositoryの履歴・tag・remoteは保持します。
+4. 同じrevisionのcheckoutを `.harness` としてGitにsubmodule登録し、`.gitmodules` とgitlinkをstageします。runtimeをsystem rootへ展開しません。
+5. 完成後は通常のsystem + submoduleです。自動commit・npm install・Minecraft起動はしません。失敗時は生成途中のtargetを消さず、原因を報告します。
+
+通常は現在のharnessの `origin` URLを使います。HEADを指すrelease tag（`v1.2.3` / `1.2.3`、複数ならversion降順）を優先し、なければHEADのSHAを使います。default生成は未commit変更を拒否します。remote側のtagと現在のcommitが異なる場合も拒否します。
+
+必要な場合だけ明示overrideできます。
+
+```sh
+node cli.mjs create ../new-system --harness-ref v1.2.3
+node cli.mjs create ../new-system --harness-url <repository-url> --harness-ref <full-commit-sha>
+```
+
+`--harness-ref` はexact tagまたは40桁SHAです。branch名は受理しません。選択revisionがremoteから取得可能で、現在の構造のtemplateを含む必要があります。URL overrideがなければorigin必須です。ローカルrepositoryのURLも使えますが、そのsystemを共有する場合は他の利用者からも取得可能なURLを指定してください。結果は常にdetached HEADとgitlink SHAで固定され、`main` 最新版へ自動追従しません。
+
+## System repositoryのclone
+
+```sh
+git clone --recurse-submodules <system-repository>
+cd <system-directory>
+npm --prefix .harness ci --ignore-scripts
+```
+
+clone済みの場合:
+
+```sh
+git submodule update --init --recursive
+npm --prefix .harness ci --ignore-scripts
+```
+
+## Harnessの更新
+
+system rootで作業中の `.harness` の変更がないことを確認し、選んだtag/commitへ更新します。
+
+```sh
+git -C .harness status --short
+git -C .harness fetch origin --tags
+git -C .harness checkout --detach <version-tag-or-commit>
+git -C .harness submodule update --init --recursive
+npm --prefix .harness ci --ignore-scripts
+node .harness/cli.mjs validate --build
+git add .harness
+git commit -m "chore: update modding harness"
+```
+
+更新単位はsystem側のsubmodule pointerです。systemごとに異なるversionを使えます。自動化も同じpointer更新で行えます。Gradle、source、spec、AGENTSを同期する処理はありません。
+
+## CLI compatibility
+
+system rootから `node .harness/cli.mjs <command>` で実行します。別cwdからは例として `node /path/to/.harness/cli.mjs validate --build --project /path/to/system` を使えます。
+
+既存のnpm scriptsも利用できます。`npm --prefix .harness run doctor` / `run validate` / `run develop` はnpm起動元のdirectoryをproject rootにし、明示の `-- --project PATH` を優先します。
 
 | Command | 内容 |
 | --- | --- |
-| `doctor` | Java/Node/wrapper/Git/agent CLI/auth/MC Pilot/required files/runtimeの診断 |
-| `validate --static` | spec/JSON/resource/doc整合性 + harness self-tests。ゲーム・Gradleなし |
-| `validate` | 上記 + Gradle classes/test |
-| `validate --agent-fast` | Codex実装セッション用。static/resource + Gradle classes/test。harness self-testsは別ゲート |
-| `validate --build` | 上記 + Gradle build |
-| `review-harness` | static検証後、実Claude Opusによる独立read-only review |
-| `develop --dry-run` | 同じ状態遷移engineのmock実行。外部AI・Gradle・Minecraft起動なし |
-| `develop` | spec→実装→静的検証→compile/test→review/fix→build→GameTest→必要なE2E→visual |
-| `setup-runtime [--accept-eula] [--players=N]` | 指定台数のexact NeoForge clientと共通serverを準備。EULAは本人の明示操作のみ |
-| `npm test` | Node built-in runnerによるharness self-tests |
+| `doctor` | Java/Node/Git/wrapper/tasks、project contract、agent CLI/auth、MC Pilot/runtime診断 |
+| `validate --static` | project spec/JSON/resources/docリンク + runtime self-tests。Gradle/ゲームなし |
+| `validate` | 上記 + Gradle task contract、classes/test |
+| `validate --agent-fast` | static/resource + task contract、classes/test。self-testsは別ゲート |
+| `validate --build` | static/self-tests + task contract、build |
+| `develop --dry-run` | 同じ状態遷移engineのmock実行。AI/Gradle/Minecraftなし |
+| `develop` | spec→実装/compile→review/fix→build→GameTest→batched E2E→visual |
+| `setup-runtime [--accept-eula] [--players=N]` | 専用runtime準備。EULA同意は本人の明示操作のみ |
+| `review-harness` | harness自身のstatic/self-testsとOpus独立review。project rootとは無関係 |
+| `create TARGET [--harness-ref TAG_OR_SHA] [--harness-url URL]` | 新規systemのbootstrap |
+| `npm --prefix .harness test` | runtime + bootstrap integration testsすべて |
 
-表のcommandは `node harness/cli.mjs <command>` で実行します。`develop` 中のCodexは同一セッションで `validate --agent-fast` の失敗を修正し、成功結果を候補に残します。通常のローカルGradleはdaemonを再利用します。sandbox内の`agent-fast`とCIはdaemonを分離するため`--no-daemon`を使います。GameTestがないfresh templateではnot-applicableにします。低コスト検証を先に完了し、完成候補だけをMinecraftへ持ち込みます。defaultはcode candidate/review3回、client boot2回、runtime/visual batch2回。resource-only修正は安全なloose pack reload、Java/registry/networking変更はrestartします。
+既存command/optionの能力とgate順序は保持しています。entry pointは従来の `harness/cli.mjs` からrootの `cli.mjs` へ移動しました。通常runtime self-testsはtemplateを必要としないテストだけを実行し、bootstrap専用テストは `npm test` で実行します。
 
-複数clientによる同期・同時操作・各視点の検証は [Multiplayer E2E](tests/e2e/README.md#multiplayer)を参照してください。起動予算には各clientを数えます。
+新規specは `Status: draft` のため実 `develop` を拒否します。仕様とAC/Non-goals/Verification割当を合意してからreadyにします。初回project commitも先に作成してください。
 
-詳細は [workflow](docs/ai/DEVELOPMENT_WORKFLOW.md)、[testing](docs/ai/TESTING_POLICY.md)、[visual](docs/ai/VISUAL_TESTING.md)、[code quality](docs/ai/CODE_QUALITY.md)、[review policy](docs/ai/REVIEW_POLICY.md)、[architecture](docs/ai/HARNESS_ARCHITECTURE.md)。常時すべてをagentへ読ませる必要はありません。
+## Configuration, policies and artifacts
 
-## Artifacts and recovery
+Runtime defaultsは [config.json](config.json): Sol/Opus、code review 3、client boot 3、visual cycle 2、GameTest auto。project固有identityはGradle/spec、操作/期待値はscenarioから読みます。project rootの `config.json` や `package.json` をharness設定として読みません。
 
-`.harness-artifacts/` はgitignoreされています。runごとに開始状態、changed files/diff、validation、agent command/process evidence、review JSON、関連log抜粋、E2E/画像、summaryを保存します。巨大latest.logや会話履歴を次のagentへ渡しません。
+runごとの明示overrideは `HARNESS_CODEX_MODEL`、`HARNESS_CLAUDE_MODEL`（Opus系のみ）、`HARNESS_CODE_REVIEWS`、`HARNESS_GAME_BOOTS`、`HARNESS_VISUAL_REVIEWS`（各1..10）、`HARNESS_GAME_TEST=required`（独自source set等）、`HARNESS_JAVA` です。重複したproject設定fileは追加しません。prepared runtime情報はproject側 `.harness-artifacts/e2e-runtime.json` に保存します。
 
-失敗はexit code 1で停止し、summary/failure.jsonに原因が残ります。予算超過を自動resetして再試行しません。根拠を読んでspec/code/runtimeを直し、明示的に新しいrunを開始してください。実行中の別developはlockで拒否します。強制終了後は所有processが停止していることを確認し、`.harness-artifacts/develop.lock` だけを手動で削除します。worldやユーザー差分を消す操作は行いません。認証不足ならCLI login、runtime不足ならE2E setupを完了してください。
+[共通agent policy](docs/ai/AGENT_POLICY.md)、[workflow](docs/ai/DEVELOPMENT_WORKFLOW.md)、[testing](docs/ai/TESTING_POLICY.md)、[review](docs/ai/REVIEW_POLICY.md)、[architecture](docs/ai/HARNESS_ARCHITECTURE.md)を参照してください。system `AGENTS.md` は自由に拡張できます。Mod開発中はruntimeをread-onlyとし、必要なharness修正は別の保守作業として扱います。
 
-## Models and configuration
+証跡はproject側 `.harness-artifacts/<command>/<run>/`。review-harnessのみharness側に保存します。失敗はexit code 1、入力誤りは2です。worldやユーザー差分を自動削除しません。並行develop/setupはlockで拒否し、crash後は所有processの停止を確認して `develop.lock` のみ手動解除してください。
 
-[harness/config.json](harness/config.json)にimplementer `gpt-6-sol`、reviewer `opus`、有限budget、GameTest modeを保存しています。`HARNESS_CODEX_MODEL` / `HARNESS_CLAUDE_MODEL` でrun単位overrideもできます。reviewerはOpus系のみ受理します。Codex defaultはこの環境のsubscription CLIで確認した正式Sol IDで、APIの最新modelとCLI accountの利用可能modelは区別します。[確認済みinterface](docs/ai/TOOL_INTERFACES.md)参照。
-
-configを巨大化させず、featureの見た目・テスト条件はspec/scenarioに置きます。独自source setでGameTestを登録するときは `gameTest: required` を使います。
-
-## MDK and template updates
-
-baseline SHA・remote・初期status・versions・構造は [upstream-baseline.json](docs/ai/upstream-baseline.json)。元MDK READMEも [UPSTREAM_README](docs/ai/UPSTREAM_README.md) に保存しました。upstream updateは別branchで差分をreviewし、ModDevGradle/NeoForge変更とharness変更を分けて取り込みます。baselineを上書きして初期情報を失わず、更新時のSHAを別記録へ追記してください。自動force push/resetは行いません。
-
-標準 `client`、`server`、`gameTestServer`、`data` は保持しています。通常の `gradlew runData`、`runClient`、`runServer` は人間が必要時に使えます。build JARは `build/libs/`。IDEの依存解決問題は `gradlew --refresh-dependencies` を検討し、`clean` は生成build出力だけを再生成します。
-
-Mojang mappingの利用条件は [NeoFormのlicense reference](https://github.com/NeoForged/NeoForm/blob/main/Mojang.md)を確認してください。MDK template licenseはTEMPLATE_LICENSE.txt、Modの配布licenseは自分の仕様で選択します。[NeoForge公式docs](https://docs.neoforged.net/docs/1.21.1/gettingstarted/)と[NeoForged Discord](https://discord.neoforged.net/)も利用できます。
-
-## Harness and project boundary
-
-ハーネスはユーザー仕様とscenarioを入力として、検証・review・Minecraft lifecycleを管理します。Mod固有のID、生成ファイル名、操作、期待値はprojectの仕様・source・resource・scenarioだけに置きます。検証用Modの専用runnerとテストもハーネス本体から分離し、それらがなくても共通self-testとdry-runを実行できます。実機qualificationの手順と結果は検証用projectとそのartifactsで管理します。
-
-Mod開発中はharnessを変更できません。Codexのfilesystem権限とstageごとのhash照合で保護します（[仕組み](docs/ai/HARNESS_ARCHITECTURE.md)）。harnessに修正が必要な場合は停止し、別の保守作業として扱います。
+MDKのversionと4つのrun構成は維持しています。baselineは [upstream-baseline.json](docs/ai/upstream-baseline.json)、元文書は [UPSTREAM_README](docs/ai/UPSTREAM_README.md)。MDK licenseは `template/TEMPLATE_LICENSE.txt`、Mod配布licenseはsystem仕様で選択します。

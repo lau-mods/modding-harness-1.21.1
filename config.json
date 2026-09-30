@@ -1,5 +1,5 @@
 {
   "models": { "implementer": "gpt-6-sol", "reviewer": "opus" },
-  "budgets": { "codeReviews": 3, "gameBoots": 2, "visualReviews": 2 },
+  "budgets": { "codeReviews": 3, "gameBoots": 3, "visualReviews": 2 },
   "gameTest": "auto"
 }

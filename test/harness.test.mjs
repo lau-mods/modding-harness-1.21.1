@@ -1,3 +1,4 @@
+import { projectFixture, properties } from './fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
@@ -6,12 +7,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run, requireSuccess, gradleCommand, subscriptionEnv, redact } from '../lib/process.mjs';
 import { classify, changedSince, snapshot, assertHarnessUnchanged, isModPath } from '../lib/repository.mjs';
-import { parseSpec, hasGameTests, gameTest, resourceReferences, staticValidation, validate, requiredFiles } from '../lib/validate.mjs';
+import { harnessValidation, requiredTasks, parseSpec, hasGameTests, gameTest, resourceReferences, staticValidation, validate, requiredFiles } from '../lib/validate.mjs';
 import { parseReview, validateReview, claudeArgs, visualSpecification, implement, codexPermissions, implementationPrompt } from '../lib/agents.mjs';
 import { localAddress, relevantLogs, mct, logMark, logsAfter, syncPack, prepareOptions, prepareEarlyDisplay, createSession } from '../lib/mc-pilot.mjs';
 import { developWorkflow, dryRunActions } from '../lib/workflow.mjs';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pass = { verdict: 'pass', findings: [], summary: 'No blocking findings' };
 const finding = { severity: 'major', category: 'correctness', file: 'x.mjs', location: '1', problem: 'A fails', required_change: 'Fix A', reason: 'AC fails' };
 const fail = { verdict: 'changes_required', findings: [finding], summary: 'Correction required' };
@@ -68,20 +69,20 @@ test('process success, failure and missing executable are distinguishable', asyn
 
 test('Mod edits preserve existing harness changes and protect all non-project files', async t => {
   const dir = await temp(t);
-  await mkdir(path.join(dir, 'harness'));
+  await mkdir(path.join(dir, '.harness'));
   await mkdir(path.join(dir, 'src'));
-  await writeFile(path.join(dir, 'harness/config.json'), 'existing user changes');
+  await writeFile(path.join(dir, '.harness/config.json'), 'existing user changes');
   await writeFile(path.join(dir, 'src/input.java'), 'before');
-  const runner = async () => ({ ok: true, stdout: 'harness/config.json\0src/input.java\0README.md\0' });
+  const runner = async () => ({ ok: true, stdout: '.harness/config.json\0src/input.java\0README.md\0' });
   const initial = await snapshot(dir, runner);
   await writeFile(path.join(dir, 'src/input.java'), 'after');
   await assertHarnessUnchanged(dir, runner, initial);
   await writeFile(path.join(dir, 'README.md'), 'unexpected harness documentation');
   await assert.rejects(() => assertHarnessUnchanged(dir, runner, initial), /protected files: README.md/);
   await rm(path.join(dir, 'README.md'));
-  await rm(path.join(dir, 'harness/config.json'));
-  await assert.rejects(() => assertHarnessUnchanged(dir, runner, initial), /harness\/config.json/);
-  for (const file of ['harness/new.mjs', 'package.json', 'tests/e2e/README.md', 'AGENTS.md']) assert.equal(isModPath(file), false);
+  await rm(path.join(dir, '.harness/config.json'));
+  await assert.rejects(() => assertHarnessUnchanged(dir, runner, initial), /\.harness\/config.json/);
+  for (const file of ['.harness/new.mjs', 'package.json', 'tests/e2e/README.md', 'AGENTS.md']) assert.equal(isModPath(file), false);
   for (const file of ['spec/PROJECT.md', 'spec/features/input.md', 'spec/PROJECT.template.md', 'spec/README.md', 'src/main/new.java', 'tests/e2e/scenarios/new.scenario.mjs', 'build.gradle']) assert.equal(isModPath(file), true);
 });
 
@@ -137,12 +138,13 @@ test('compile failure is repaired and revalidated within one Codex invocation', 
   await mkdir(path.dirname(path.join(dir, resource)), { recursive: true });
   await writeFile(path.join(dir, source), 'broken');
   await writeFile(path.join(dir, resource), '{}');
-  await writeFile(path.join(dir, 'gradle.properties'), 'mod_id=test_input\n');
+  await writeFile(path.join(dir, 'gradle.properties'), properties);
   await writeFile(path.join(dir, 'spec/PROJECT.md'), specification.replace(/\| AC-([A-D]) \|[^\n]+/g, `| AC-$1 | static | ${resource} |`));
   let codexCalls = 0, validations = 0;
   const files = [...requiredFiles, source, resource].join('\0') + '\0';
-  const gradle = async (command) => {
+  const gradle = async (command, args) => {
     if (command === 'git') return { ok: true, stdout: files };
+    if (args.includes('tasks')) return { ok: true, stdout: requiredTasks.join('\n'), stderr: '' };
     validations++;
     const ok = (await readFile(path.join(dir, source), 'utf8')) === 'fixed';
     return { ok, code: ok ? 0 : 1, stdout: '', stderr: ok ? '' : 'Java compile error' };
@@ -197,7 +199,7 @@ test('a final integrity failure preserves the original failure', async () => {
 
 test('harness maintenance findings stop instead of triggering a Mod correction', async () => {
   const actions = dryRunActions(async () => {});
-  actions.review = async () => ({ ...fail, findings: [{ ...finding, category: 'protected-input', severity: 'blocker', file: 'harness/config.json' }] });
+  actions.review = async () => ({ ...fail, findings: [{ ...finding, category: 'protected-input', severity: 'blocker', file: '.harness/config.json' }] });
   const state = await developWorkflow(actions, budgets);
   assert.equal(state.status, 'failed'); assert.equal(state.codeAttempts, 1);
   assert.equal(state.codeReviews, 1); assert.equal(state.boots, 0);
@@ -228,19 +230,22 @@ test('Windows Gradle calls wrapper Java main without a shell', () => {
 
 test('agent-fast validation runs static checks and compile/unit without harness self-tests', async t => {
   const dir = await temp(t);
+  const project = path.join(dir, 'project');
+  await projectFixture(project);
   let gradleCalls = 0;
   const runner = async (command, args, options) => {
     if (command === 'git') return run(command, args, options);
-    assert.equal(command, gradleCommand(root, ['classes', 'test']).command);
+    assert.equal(command, gradleCommand(project, ['classes', 'test']).command);
+    if (args.includes('tasks')) return { ok: true, stdout: requiredTasks.join('\n'), stderr: '' };
     assert.ok(args.indexOf('classes') >= 0 && args[args.indexOf('classes') + 1] === 'test');
     assert.ok(args.includes('--no-daemon'));
     gradleCalls++;
     return { ok: true, code: 0, stdout: 'BUILD SUCCESSFUL', stderr: '' };
   };
-  const result = await validate(root, runner, dir, { agentFast: true });
+  const result = await validate(project, runner, dir, { agentFast: true });
   assert.equal(gradleCalls, 1);
   assert.deepEqual(result.harness, { status: 'not-run' });
-  assert.ok(result.validatedFiles['harness/lib/validate.mjs']);
+  assert.ok(result.validatedFiles['spec/PROJECT.md']);
 });
 
 test('subscription environment does not forward API credentials', () => {
@@ -300,14 +305,14 @@ test('visual evidence includes accepted AC wording and referenced assets', () =>
 });
 
 test('schema keys match parser contract', async () => {
-  const schema = JSON.parse(await readFile(path.join(root, 'harness/schemas/review.schema.json'), 'utf8'));
+  const schema = JSON.parse(await readFile(path.join(root, 'schemas/review.schema.json'), 'utf8'));
   assert.deepEqual(schema.required.sort(), Object.keys(pass).sort());
   assert.deepEqual(schema.properties.findings.items.required.sort(), Object.keys(finding).sort());
   assert.equal(schema.additionalProperties, false);
 });
 
 test('template placeholders are rejected and independent complete input is accepted', async () => {
-  const text = await readFile(path.join(root, 'spec/PROJECT.template.md'), 'utf8');
+  const text = 'Status: draft\nTEMPLATE_NOT_CONFIGURED';
   assert.throws(() => parseSpec(text), /not ready/);
   assert.throws(() => parseSpec(text.replace('Status: draft', 'Status: ready')), /placeholder/);
   assert.equal(parseSpec(specification).modId, 'test_input');
@@ -348,7 +353,7 @@ test('resource validation reports deleted local files but accepts builtin and fo
 });
 
 test('repository static/documentation checks pass without Minecraft', async () => {
-  const result = await staticValidation(root, run);
+  const result = await harnessValidation(run);
   assert.deepEqual(result.errors, []);
 });
 
@@ -426,8 +431,6 @@ test('local address rejects remote hosts, DNS aliases and invalid ports', () => 
 
 test('MC Pilot validates both CLI and action success without shell execution', async t => {
   const fixture = await temp(t);
-  await mkdir(path.join(fixture, 'node_modules/@kzheart_/mc-pilot/bin'), { recursive: true });
-  await writeFile(path.join(fixture, 'node_modules/@kzheart_/mc-pilot/bin/mct'), 'mock');
   const runner = async (_cmd, args) => { assert.equal(args.at(-1), 'all'); return { ok: true, stdout: JSON.stringify({ success: true, data: { success: true, data: { world: true } } }) }; };
   assert.deepEqual(await mct(fixture, runner, ['status', 'all']), { world: true });
   await assert.rejects(() => mct(fixture, async () => ({ ok: true, stdout: '{"success":true,"data":{"success":false,"error":"NO_WORLD"}}' }), ['status', 'all']), /action failed/);
@@ -488,8 +491,8 @@ test('real MC Pilot adapter batches mocked CLI actions and preserves worlds on c
   const clientDir = path.join(dir, '.harness-artifacts/mct-home/clients/mcmod-fixture/minecraft');
   const serverDir = path.join(dir, '.harness-artifacts/server');
   const files = {
-    'gradle.properties': 'neo_version=21.1.252\nmod_id=test_input\nmod_version=2\n', 'harness/log-allowlist.json': '[]',
-    'node_modules/@kzheart_/mc-pilot/bin/mct': '', 'build/libs/test_input-2.jar': 'current build',
+    'gradle.properties': 'neo_version=21.1.252\nmod_id=test_input\nmod_version=2\n', 
+     'build/libs/test_input-2.jar': 'current build',
     'build/libs/test_input-1.jar': 'old version', 'build/libs/old_id-2.jar': 'old identity',
     '.harness-artifacts/e2e-runtime.json': JSON.stringify({ client: 'mcmod-fixture', address: '127.0.0.1:25579' }),
     '.harness-artifacts/server/eula.txt': 'eula=true\n',

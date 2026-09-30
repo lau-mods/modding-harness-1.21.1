@@ -1,40 +1,29 @@
 name: Build
-
 on: [push, pull_request]
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      - name: Setup JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '21'
-          distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
-
-      - name: Install MC Pilot without global setup scripts
-        run: npm ci --ignore-scripts
-
-      - name: Validate harness and resources
-        run: node harness/cli.mjs validate --static
-
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - name: Bootstrap pinned checkout as a normal system
+        run: node cli.mjs create "$RUNNER_TEMP/harness-system" --harness-url "$GITHUB_WORKSPACE" --harness-ref "$(git rev-parse HEAD)"
+      - name: Install system submodule dependencies
+        run: npm --prefix "$RUNNER_TEMP/harness-system/.harness" ci --ignore-scripts
+      - name: Validate and build generated project
+        run: node "$RUNNER_TEMP/harness-system/.harness/cli.mjs" validate --build --project "$RUNNER_TEMP/harness-system"
       - name: Exercise development orchestration
-        run: node harness/cli.mjs develop --dry-run
-
-      - name: Build with Gradle
-        run: ./gradlew build
+        run: node "$RUNNER_TEMP/harness-system/.harness/cli.mjs" develop --dry-run --project "$RUNNER_TEMP/harness-system"
