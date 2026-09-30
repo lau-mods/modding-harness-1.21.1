@@ -91,6 +91,23 @@ export async function syncPack(root, pack, kind) {
   }
 }
 
+export async function prepareEarlyDisplay(clientDir) {
+  const file = path.join(clientDir, 'config/fml.toml');
+  let text = '';
+  try { text = await readFile(file, 'utf8'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // FML 4.0.44 logs successful glfwInit calls taking over one second as ERROR.
+  // Only change the root setting; table entries belong to other settings.
+  const table = text.search(/^[\t ]*\[/m);
+  const root = table < 0 ? text : text.slice(0, table);
+  const setting = /^([\t ]*earlyWindowControl[\t ]*=[\t ]*)(?:true|false)([\t ]*(?:#[^\r\n]*)?\r?)$/m;
+  const updated = setting.test(root)
+    ? root.replace(setting, '$1false$2') + text.slice(root.length)
+    : 'earlyWindowControl = false\n' + text;
+  await mkdir(path.dirname(file), { recursive: true });
+  if (updated !== text) await writeFile(file, updated);
+}
+
 export async function prepareOptions(clientDir) {
   const file = path.join(clientDir, 'options.txt');
   let source = '';
@@ -213,6 +230,7 @@ export async function createSession(root, runner, dir, { checkPort = portIsFree,
     for (const client of clients) {
       await syncPack(root, client.resourcePack, 'assets');
       await prepareOptions(client.gameDir);
+      await prepareEarlyDisplay(client.gameDir);
     }
     const buildProperties = await readFile(path.join(root, 'gradle.properties'), 'utf8');
     const modId = buildProperties.match(/^mod_id=(.+)$/m)?.[1].trim();
@@ -426,6 +444,7 @@ export async function setupRuntime(root, runner, dir, { acceptEula = false, clie
     const meta = JSON.parse(await readFile(instance, 'utf8'));
     if (meta.loader !== 'neoforge' || meta.mcVersion !== '1.21.1' || meta.account !== client.account) throw new Error(`Unexpected MC Pilot instance identity: ${client.name}`);
     const gameDir = path.join(home, 'clients', client.name, 'minecraft');
+    await prepareEarlyDisplay(gameDir);
     await save(path.join(dir, `original-instance-${client.name}.json`), meta);
     meta.launchArgs = ['--runtime-root', runtimeRoot, '--version-id', versions.versionId, '--game-dir', gameDir, '--max-mem', '2g'];
     meta.javaCommand = java;

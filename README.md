@@ -45,6 +45,7 @@ CodexはspecのMod IDに合わせMDK sampleを更新し、機能と必要なtest
 | `doctor` | Java/Node/wrapper/Git/agent CLI/auth/MC Pilot/required files/runtimeの診断 |
 | `validate --static` | spec/JSON/resource/doc整合性 + harness self-tests。ゲーム・Gradleなし |
 | `validate` | 上記 + Gradle classes/test |
+| `validate --agent-fast` | Codex実装セッション用。static/resource + Gradle classes/test。harness self-testsは別ゲート |
 | `validate --build` | 上記 + Gradle build |
 | `review-harness` | static検証後、実Claude Opusによる独立read-only review |
 | `develop --dry-run` | 同じ状態遷移engineのmock実行。外部AI・Gradle・Minecraft起動なし |
@@ -52,7 +53,7 @@ CodexはspecのMod IDに合わせMDK sampleを更新し、機能と必要なtest
 | `setup-runtime [--accept-eula] [--players=N]` | 指定台数のexact NeoForge clientと共通serverを準備。EULAは本人の明示操作のみ |
 | `npm test` | Node built-in runnerによるharness self-tests |
 
-表のcommandは `node harness/cli.mjs <command>` で実行します。GameTestがないfresh templateではnot-applicableにします。低コスト検証を先に完了し、完成候補だけをMinecraftへ持ち込みます。defaultはcode candidate/review3回、client boot2回、runtime/visual batch2回。resource-only修正は安全なloose pack reload、Java/registry/networking変更はrestartします。
+表のcommandは `node harness/cli.mjs <command>` で実行します。`develop` 中のCodexは同一セッションで `validate --agent-fast` の失敗を修正し、成功結果を候補に残します。通常のローカルGradleはdaemonを再利用します。sandbox内の`agent-fast`とCIはdaemonを分離するため`--no-daemon`を使います。GameTestがないfresh templateではnot-applicableにします。低コスト検証を先に完了し、完成候補だけをMinecraftへ持ち込みます。defaultはcode candidate/review3回、client boot2回、runtime/visual batch2回。resource-only修正は安全なloose pack reload、Java/registry/networking変更はrestartします。
 
 複数clientによる同期・同時操作・各視点の検証は [Multiplayer E2E](tests/e2e/README.md#multiplayer)を参照してください。起動予算には各clientを数えます。
 

@@ -14,7 +14,7 @@ export async function developWorkflow(actions, budgets) {
       try { await step('static-compile-test', () => actions.verify()); }
       catch (error) {
         if (error.code === 'HARNESS_CHANGED') throw error;
-        task = { task: 'Fix deterministic verification failures', failures: [error.message.slice(-8000)] };
+        task = { repair: true, task: 'Fix deterministic verification failures', failures: [error.message.slice(-8000)] };
         continue;
       }
       state.codeReviews++;
@@ -28,11 +28,11 @@ export async function developWorkflow(actions, budgets) {
           return;
         } catch (error) {
           if (error.code === 'HARNESS_CHANGED') throw error;
-          task = { task: 'Fix build or GameTest failures', failures: [error.message.slice(-8000)] };
+          task = { repair: true, task: 'Fix build or GameTest failures', failures: [error.message.slice(-8000)] };
           continue;
         }
       }
-      task = { task: 'Correct review findings', findings: review.findings };
+      task = { repair: true, task: 'Correct review findings', findings: review.findings };
     }
     throw new Error('Code review/fix budget exhausted; inspect the latest findings or test failures');
   }
@@ -65,14 +65,14 @@ export async function developWorkflow(actions, budgets) {
         } catch (error) {
           if (['BOOT_BUDGET', 'CLEANUP_FAILED', 'HARNESS_CHANGED'].includes(error.code)) throw error;
           result = undefined;
-          correction = { task: 'Correct runtime verification failures', failures: [error.message.slice(-8000)] };
+          correction = { repair: true, task: 'Correct runtime verification failures', failures: [error.message.slice(-8000)] };
         }
         if (result) {
           if (result.screenshots.length) {
             state.visualReviews++;
             const visual = await step('visual-review', () => actions.visual(result));
             if (visual.verdict === 'pass') { accepted = true; break; }
-            correction = { task: 'Correct visual findings', findings: visual.findings };
+            correction = { repair: true, task: 'Correct visual findings', findings: visual.findings };
           } else { accepted = true; break; }
         }
         if (cycle + 1 === budgets.visualReviews) { state.lastFailure = correction; break; }

@@ -93,7 +93,7 @@ export function requireSuccess(result, label) {
 }
 
 export function gradleCommand(root, tasks, platform = process.platform, env = process.env) {
-  const args = [...tasks, '--no-daemon', '--console=plain'];
+  const args = [...tasks, ...(env.CI ? ['--no-daemon'] : []), '--console=plain'];
   if (platform === 'win32') {
     const java = env.JAVA_HOME ? path.join(env.JAVA_HOME, 'bin', 'java.exe') : 'java';
     return { command: java, args: ['-classpath', path.join(root, 'gradle/wrapper/gradle-wrapper.jar'), 'org.gradle.wrapper.GradleWrapperMain', ...args] };

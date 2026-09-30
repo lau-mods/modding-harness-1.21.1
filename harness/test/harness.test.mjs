@@ -6,9 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run, requireSuccess, gradleCommand, subscriptionEnv, redact } from '../lib/process.mjs';
 import { classify, changedSince, snapshot, assertHarnessUnchanged, isModPath } from '../lib/repository.mjs';
-import { parseSpec, hasGameTests, gameTest, resourceReferences, staticValidation } from '../lib/validate.mjs';
-import { parseReview, validateReview, claudeArgs, visualSpecification, implement, codexPermissions } from '../lib/agents.mjs';
-import { localAddress, relevantLogs, mct, logMark, logsAfter, syncPack, prepareOptions, createSession } from '../lib/mc-pilot.mjs';
+import { parseSpec, hasGameTests, gameTest, resourceReferences, staticValidation, validate, requiredFiles } from '../lib/validate.mjs';
+import { parseReview, validateReview, claudeArgs, visualSpecification, implement, codexPermissions, implementationPrompt } from '../lib/agents.mjs';
+import { localAddress, relevantLogs, mct, logMark, logsAfter, syncPack, prepareOptions, prepareEarlyDisplay, createSession } from '../lib/mc-pilot.mjs';
 import { developWorkflow, dryRunActions } from '../lib/workflow.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -117,11 +117,60 @@ test('an implementation can align PROJECT.md with user instructions while preser
     assert.equal(command, 'codex');
     assert.ok(options.input.includes(task.task));
     await writeFile(path.join(dir, 'spec/PROJECT.md'), specification.replaceAll('AC-A', 'AC-INPUT'));
+    await writeFile(path.join(options.env.HARNESS_AGENT_FAST_DIR, 'validation.json'), JSON.stringify({ ok: true, static: { ok: true }, gradle: { ok: true, stage: 'compile' }, validatedFiles: await snapshot(dir, runner) }));
     return { ok: true, code: 0, stdout: '', stderr: '' };
   };
   await implement(dir, runner, { models: { implementer: 'gpt-6-sol' } }, path.join(dir, 'artifacts'), task);
   assert.equal(await readFile(path.join(dir, 'spec/PROJECT.md'), 'utf8'), specification.replaceAll('AC-A', 'AC-INPUT'));
   assert.equal(await readFile(path.join(dir, 'AGENTS.md'), 'utf8'), 'existing user policy');
+});
+
+test('compile failure is repaired and revalidated within one Codex invocation', async t => {
+  const dir = await temp(t);
+  for (const file of requiredFiles) {
+    await mkdir(path.dirname(path.join(dir, file)), { recursive: true });
+    await writeFile(path.join(dir, file), file.endsWith('.json') ? '{}' : 'fixture');
+  }
+  const source = 'src/main/java/Example.java';
+  const resource = 'src/main/resources/assets/test_input/models/a.json';
+  await mkdir(path.dirname(path.join(dir, source)), { recursive: true });
+  await mkdir(path.dirname(path.join(dir, resource)), { recursive: true });
+  await writeFile(path.join(dir, source), 'broken');
+  await writeFile(path.join(dir, resource), '{}');
+  await writeFile(path.join(dir, 'gradle.properties'), 'mod_id=test_input\n');
+  await writeFile(path.join(dir, 'spec/PROJECT.md'), specification.replace(/\| AC-([A-D]) \|[^\n]+/g, `| AC-$1 | static | ${resource} |`));
+  let codexCalls = 0, validations = 0;
+  const files = [...requiredFiles, source, resource].join('\0') + '\0';
+  const gradle = async (command) => {
+    if (command === 'git') return { ok: true, stdout: files };
+    validations++;
+    const ok = (await readFile(path.join(dir, source), 'utf8')) === 'fixed';
+    return { ok, code: ok ? 0 : 1, stdout: '', stderr: ok ? '' : 'Java compile error' };
+  };
+  const runner = async (command, _args, options) => {
+    if (command === 'git') return { ok: true, stdout: files };
+    codexCalls++;
+    assert.match(options.input, /validate --agent-fast/);
+    const fast = { agentFast: true, requireReady: true };
+    await assert.rejects(() => validate(dir, gradle, options.env.HARNESS_AGENT_FAST_DIR, fast), /Java compile error/);
+    await writeFile(path.join(dir, source), 'fixed');
+    await validate(dir, gradle, options.env.HARNESS_AGENT_FAST_DIR, fast);
+    return { ok: true, code: 0, stdout: '', stderr: '' };
+  };
+  await implement(dir, runner, { models: { implementer: 'gpt-6-sol' } }, path.join(dir, 'candidate'), { task: 'Implement' });
+  assert.equal(codexCalls, 1);
+  assert.equal(validations, 2);
+  assert.equal((await readFile(path.join(dir, source), 'utf8')), 'fixed');
+});
+
+test('repair prompt includes relevant AC and changed files without resending the specification', () => {
+  const expanded = specification + 'Additional detail. '.repeat(1000);
+  const initial = implementationPrompt(expanded, { task: 'Implement' });
+  const repair = implementationPrompt(expanded, { repair: true, task: 'Correct review findings', findings: [{ problem: 'AC-B fails' }], changedFiles: ['src/Example.java'] });
+  assert.match(repair, /AC-B: Synthetic criterion B/);
+  assert.match(repair, /src\/Example.java/);
+  assert.doesNotMatch(repair, /Additional detail/);
+  assert.ok(repair.length < initial.length / 4);
 });
 
 test('harness mutation at a stage boundary stops instead of asking Codex to repair it', async () => {
@@ -173,6 +222,25 @@ test('Windows Gradle calls wrapper Java main without a shell', () => {
   assert.ok(windows.args.includes('org.gradle.wrapper.GradleWrapperMain'));
   assert.ok(windows.args.includes('build'));
   assert.equal(gradleCommand('/repo', ['test'], 'linux').command, '/repo/gradlew');
+  assert.ok(!gradleCommand('/repo', ['classes', 'test'], 'linux', {}).args.includes('--no-daemon'));
+  assert.ok(gradleCommand('/repo', ['classes', 'test'], 'linux', { CI: 'true' }).args.includes('--no-daemon'));
+});
+
+test('agent-fast validation runs static checks and compile/unit without harness self-tests', async t => {
+  const dir = await temp(t);
+  let gradleCalls = 0;
+  const runner = async (command, args, options) => {
+    if (command === 'git') return run(command, args, options);
+    assert.equal(command, gradleCommand(root, ['classes', 'test']).command);
+    assert.ok(args.indexOf('classes') >= 0 && args[args.indexOf('classes') + 1] === 'test');
+    assert.ok(args.includes('--no-daemon'));
+    gradleCalls++;
+    return { ok: true, code: 0, stdout: 'BUILD SUCCESSFUL', stderr: '' };
+  };
+  const result = await validate(root, runner, dir, { agentFast: true });
+  assert.equal(gradleCalls, 1);
+  assert.deepEqual(result.harness, { status: 'not-run' });
+  assert.ok(result.validatedFiles['harness/lib/validate.mjs']);
 });
 
 test('subscription environment does not forward API credentials', () => {
@@ -384,6 +452,29 @@ test('visual options preserve unrelated settings and enable the generated pack',
   assert.match(result, /unrelated:true/); assert.match(result, /fov:0/); assert.match(result, /file\/harness-resources/);
 });
 
+test('early display preparation creates config and is idempotent', async t => {
+  const dir = await temp(t);
+  const file = path.join(dir, 'config/fml.toml');
+  await prepareEarlyDisplay(dir);
+  assert.equal(await readFile(file, 'utf8'), 'earlyWindowControl = false\n');
+  await prepareEarlyDisplay(dir);
+  assert.equal(await readFile(file, 'utf8'), 'earlyWindowControl = false\n');
+});
+
+test('early display preparation preserves comments, CRLF and unrelated table settings', async t => {
+  const dir = await temp(t);
+  const file = path.join(dir, 'config/fml.toml');
+  await mkdir(path.dirname(file));
+  const original = '# FML\r\n  earlyWindowControl = true # splash\r\nmaxThreads = -1\r\n[dependencyOverrides]\r\nearlyWindowControl = ["+example"]';
+  await writeFile(file, original);
+  await prepareEarlyDisplay(dir);
+  assert.equal(await readFile(file, 'utf8'), original.replace('= true', '= false'));
+  const withoutRootSetting = '# FML\n[dependencyOverrides]\nearlyWindowControl = ["+example"]';
+  await writeFile(file, withoutRootSetting);
+  await prepareEarlyDisplay(dir);
+  assert.equal(await readFile(file, 'utf8'), 'earlyWindowControl = false\n' + withoutRootSetting);
+});
+
 test('managed server stop sends a save/stop command before forced termination', async () => {
   const controller = new AbortController();
   const result = await run(process.execPath, ['-e', 'process.stdout.write("ready");process.stdin.on("data",s=>{if(s.toString()==="stop\\n"){process.stdout.write("saved");process.exit(0)}})'], {
@@ -419,7 +510,11 @@ test('real MC Pilot adapter batches mocked CLI actions and preserves worlds on c
     }
     const cli = args.slice(1); let data;
     if (cli[0] === 'client' && cli[1] === 'list') data = { clients: [{ name: 'mcmod-fixture', account: 'TestPlayer', loader: 'neoforge', mcVersion: '1.21.1', wsPort: 25580, running, launchArgs: ['--version-id', 'neoforge-21.1.252', '--game-dir', clientDir] }] };
-    else if (cli[0] === 'client' && cli[1] === 'launch') { assert.equal(cli[cli.indexOf('--ws-port') + 1], '25580'); running = true; launches++; await writeFile(path.join(dir, '.harness-artifacts/mct-home/logs/client-mcmod-fixture.log'), 'INFO joined\n'); data = {}; }
+    else if (cli[0] === 'client' && cli[1] === 'launch') {
+      assert.equal(await readFile(path.join(clientDir, 'config/fml.toml'), 'utf8'), 'earlyWindowControl = false\n');
+      assert.equal(cli[cli.indexOf('--ws-port') + 1], '25580'); running = true; launches++;
+      await writeFile(path.join(dir, '.harness-artifacts/mct-home/logs/client-mcmod-fixture.log'), 'INFO joined\n'); data = {};
+    }
     else if (cli[0] === 'client' && cli[1] === 'wait-ready') data = { connected: true, inWorld: true };
     else if (cli[0] === 'client' && cli[1] === 'stop') { running = false; data = { stopped: true }; }
     else data = { success: true, data: { x: 0.5 } };
