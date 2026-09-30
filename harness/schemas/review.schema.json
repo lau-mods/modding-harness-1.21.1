@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "findings", "summary"],
+  "properties": {
+    "verdict": { "enum": ["pass", "changes_required"] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "category", "file", "location", "problem", "required_change", "reason"],
+        "properties": {
+          "severity": { "enum": ["blocker", "major", "minor"] },
+          "category": { "type": "string", "minLength": 1 },
+          "file": { "type": "string", "minLength": 1 },
+          "location": { "type": "string", "minLength": 1 },
+          "problem": { "type": "string", "minLength": 1 },
+          "required_change": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "summary": { "type": "string", "minLength": 1 }
+  }
+}

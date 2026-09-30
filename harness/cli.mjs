@@ -1,0 +1,147 @@
+#!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { readFile, writeFile, mkdir, readdir, open, unlink } from 'node:fs/promises';
+import { run, gradleCommand, requireSuccess } from './lib/process.mjs';
+import { loadConfig, save, snapshot, workingChanges, changedSince, classify, assertHarnessUnchanged } from './lib/repository.mjs';
+import { validate, parseSpec, gameTest } from './lib/validate.mjs';
+import { doctor } from './lib/doctor.mjs';
+import { review, implement } from './lib/agents.mjs';
+import { createSession, setupRuntime } from './lib/mc-pilot.mjs';
+import { acceptanceCoverage, coverageRows } from './lib/coverage.mjs';
+import { developWorkflow, dryRunActions } from './lib/workflow.mjs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const [command, ...flags] = process.argv.slice(2);
+const playerFlags = flags.filter(flag => flag.startsWith('--players='));
+const playerCount = playerFlags.length ? Number(playerFlags[0].slice('--players='.length)) : 1;
+const allowed = { doctor: [], validate: ['--static', '--build'], 'review-harness': [], develop: ['--dry-run'], 'setup-runtime': ['--accept-eula'] };
+if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].includes(flag) && !(command === 'setup-runtime' && /^--players=[1-9]\d*$/.test(flag))) || playerFlags.length > 1 || !Number.isSafeInteger(playerCount) || (flags.includes('--static') && flags.includes('--build'))) {
+  console.error('Usage: node harness/cli.mjs doctor | validate [--static|--build] | review-harness | develop [--dry-run] | setup-runtime [--accept-eula] [--players=N]');
+  process.exitCode = 2;
+} else {
+  const id = `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}`;
+  const dir = path.join(root, '.harness-artifacts', command === 'review-harness' ? 'harness-review' : command, id);
+  await mkdir(dir, { recursive: true });
+  let lock;
+  const lockPath = path.join(root, '.harness-artifacts/develop.lock');
+  try {
+    const config = await loadConfig(root);
+    if (command === 'setup-runtime') {
+      lock = await open(lockPath, 'wx'); await lock.writeFile(JSON.stringify({ pid: process.pid, dir }));
+      console.log(await setupRuntime(root, run, dir, { acceptEula: flags.includes('--accept-eula'), playerCount }));
+    } else if (command === 'doctor') {
+      const result = await doctor(root, run); await save(path.join(dir, 'doctor.json'), result);
+      for (const check of result.checks) console.log(`${check.ok ? 'OK' : 'MISSING'} ${check.name}: ${check.detail}`);
+      process.exitCode = result.ok ? 0 : 1;
+    } else if (command === 'validate') {
+      await validate(root, run, dir, { stage: flags.includes('--static') ? 'static' : flags.includes('--build') ? 'build' : 'compile' });
+      console.log('Validation passed');
+    } else if (command === 'review-harness') {
+      const validation = await validate(root, run, path.join(dir, 'verification'), { stage: 'static' });
+      let previousFindings = [];
+      for (const previous of (await readdir(path.dirname(dir))).filter(name => name !== id).sort().reverse()) {
+        try { previousFindings = JSON.parse(await readFile(path.join(path.dirname(dir), previous, 'review.json'), 'utf8')).findings; break; }
+        catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
+      }
+      const result = await review(root, run, config, dir, 'harness', { validation, previousFindings });
+      console.log(JSON.stringify(result, null, 2)); process.exitCode = result.verdict === 'pass' ? 0 : 1;
+    } else if (flags.includes('--dry-run')) {
+      const result = await developWorkflow(dryRunActions(state => save(path.join(dir, 'summary.json'), { ...state, simulated: true })), config.budgets);
+      console.log(JSON.stringify({ ...result, simulated: true }, null, 2)); process.exitCode = result.status === 'pass' ? 0 : 1;
+    } else {
+      // Lock is exclusive; never steal it automatically after a crash.
+      lock = await open(lockPath, 'wx'); await lock.writeFile(JSON.stringify({ pid: process.pid, dir }));
+      const initial = await snapshot(root, run);
+      const initialChanges = await workingChanges(root, run);
+      const specificationAtStart = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
+      await save(path.join(dir, 'initial-state.json'), { initial, initialChanges, specificationAtStart });
+      let attempt = 0, candidateDir, changed = [], correctionBase, session, scenarios;
+      const assertPolicyUnchanged = () => assertHarnessUnchanged(root, run, initial);
+      const actions = {
+        guard: assertPolicyUnchanged,
+        record: state => save(path.join(dir, 'summary.json'), state),
+        async specification() {
+          const text = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
+          const spec = parseSpec(text);
+          const rows = coverageRows(text);
+          const missing = spec.criteria.filter(id => !rows.some(row => row.ac === id));
+          if (missing.length) throw new Error(`Specification needs Verification assignments for ${missing.join(', ')}; see spec/README.md`);
+          const environment = await doctor(root, run);
+          await save(path.join(dir, 'doctor.json'), environment);
+          const mandatory = environment.checks.filter(check => !/MC Pilot|E2E runtime/.test(check.name));
+          if (mandatory.some(check => !check.ok)) throw new Error('Required development environment unavailable; see doctor.json');
+        },
+        async implement(task) {
+          candidateDir = path.join(dir, `candidate-${++attempt}`);
+          await implement(root, run, config, candidateDir, task);
+          const current = await assertPolicyUnchanged();
+          changed = [...new Set([...initialChanges, ...changedSince(initial, current)])];
+          await save(path.join(candidateDir, 'changed-files.json'), { files: changed, classification: classify(changed) });
+          const diff = requireSuccess(await run('git', ['diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', 'src', 'spec', 'tests', 'build.gradle', 'settings.gradle', 'gradle.properties'], { cwd: root }), 'git diff');
+          await writeFile(path.join(candidateDir, 'diff.patch'), diff.stdout);
+        },
+        verify: () => validate(root, run, candidateDir, { requireReady: true }),
+        async review() {
+          const diff = await readFile(path.join(candidateDir, 'diff.patch'), 'utf8');
+          const currentSpec = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
+          const untracked = requireSuccess(await run('git', ['ls-files', '-z', '--others', '--exclude-standard'], { cwd: root }), 'git untracked files');
+          return review(root, run, config, path.join(candidateDir, 'code-review'), 'code', {
+            specificationBeforeEdit: currentSpec === specificationAtStart ? undefined : specificationAtStart,
+            changedFiles: changed, validation: JSON.parse(await readFile(path.join(candidateDir, 'validation.json'), 'utf8')),
+            changedFilesAbsentFromDiff: untracked.stdout.split('\0').filter(file => changed.includes(file) && /^(src\/|spec\/|tests\/e2e\/|(?:build|settings)\.gradle$|gradle\.properties$)/.test(file)), diffTruncated: diff.length > 60_000,
+            diff: diff.slice(0, 60_000) + (diff.length > 60_000 ? '\n[DIFF TRUNCATED: read affected snapshot source files for the remaining changes]' : '')
+          });
+        },
+        async build() {
+          const cmd = gradleCommand(root, ['build']); const result = await run(cmd.command, cmd.args, { cwd: root, timeoutMs: 900_000 });
+          await save(path.join(candidateDir, 'build.log'), result.stdout + result.stderr); requireSuccess(result, 'Gradle build');
+        },
+        async gameTest() {
+          if (classify(changed).gameTest) return gameTest(root, run, candidateDir, config.gameTest);
+          const result = { status: 'not-applicable', reason: 'Change classification does not require world/server verification' };
+          await save(path.join(candidateDir, 'gametest.json'), result); return result;
+        },
+        classify: async () => classify(changed),
+        async preflight() {
+          scenarios = (await acceptanceCoverage(root, candidateDir)).scenarios;
+          if (!scenarios.length) throw new Error('Runtime changes require acceptance-linked *.scenario.mjs coverage');
+          if (classify(changed).visual && !scenarios.some(scenario => scenario.visual)) throw new Error('Visual changes require a scenario with visual criteria and screenshots');
+          const playerCount = Math.max(...scenarios.map(s => s.players ?? 1));
+          const requiredBoots = playerCount * (scenarios.some(s => s.phase === 'after-restart') ? 2 : 1);
+          if (requiredBoots > config.budgets.gameBoots) throw new Error(`Scenarios require at least ${requiredBoots} client boots; gameBoots is ${config.budgets.gameBoots}`);
+          session = await createSession(root, run, path.join(dir, 'runtime'), { playerCount });
+          return session.playerCount;
+        },
+        start: () => session.start(), stop: async () => { if (session) await session.stop(); },
+        async e2e(cycle) {
+          const result = await session.batch(scenarios.filter(s => s.phase !== 'after-restart'), cycle);
+          return { ...result, requiresRestart: scenarios.some(s => s.phase === 'after-restart') };
+        },
+        e2ePersistence: cycle => session.batch(scenarios.filter(s => s.phase === 'after-restart'), `${cycle}-persisted`),
+        visual: result => review(root, run, config, path.join(candidateDir, 'visual-review'), 'visual', { screenshots: result.screenshots }),
+        async markCorrection() { correctionBase = await snapshot(root, run); },
+        async classifyCorrection() {
+          const current = await assertPolicyUnchanged();
+          const files = changedSince(correctionBase, current);
+          const classification = classify(files);
+          if (files.some(file => !current[file])) classification.restart = true;
+          try { await session.ready(); } catch { classification.restart = true; }
+          scenarios = (await acceptanceCoverage(root, candidateDir)).scenarios;
+          if (!scenarios.length || (classify(changed).visual && !scenarios.some(scenario => scenario.visual))) throw new Error('Required E2E/visual coverage was removed during correction');
+          if (scenarios.some(s => (s.players ?? 1) > session.playerCount)) throw new Error('Correction requires more clients; prepare the runtime and start a new development run');
+          return classification;
+        },
+        reload: kinds => session.reload(kinds)
+      };
+      const result = await developWorkflow(actions, config.budgets);
+      console.log(JSON.stringify(result, null, 2)); process.exitCode = result.status === 'pass' ? 0 : 1;
+    }
+  } catch (error) {
+    await save(path.join(dir, 'failure.json'), { error: error.message });
+    console.error(error.message); process.exitCode = 1;
+  } finally {
+    if (lock) { await lock.close(); await unlink(lockPath); }
+    console.log(`Artifacts: ${path.relative(root, dir)}`);
+  }
+}

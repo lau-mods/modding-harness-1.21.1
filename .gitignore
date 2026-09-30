@@ -38,3 +38,12 @@ run/
 **/src/generated/**/.cache/
 repo/
 !**/src/**/repo/
+
+### AI harness (local evidence, never credentials) ###
+.harness-artifacts/
+node_modules/
+.mct/
+mct.config.json
+*.local.json
+.env
+.env.*
