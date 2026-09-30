@@ -8,7 +8,7 @@ import { run, requireSuccess, gradleCommand, subscriptionEnv, redact } from '../
 import { classify, changedSince, snapshot, assertHarnessUnchanged, isModPath } from '../lib/repository.mjs';
 import { parseSpec, hasGameTests, gameTest, resourceReferences, staticValidation, validate, requiredFiles } from '../lib/validate.mjs';
 import { parseReview, validateReview, claudeArgs, visualSpecification, implement, codexPermissions, implementationPrompt } from '../lib/agents.mjs';
-import { localAddress, relevantLogs, mct, logMark, logsAfter, syncPack, prepareOptions, createSession } from '../lib/mc-pilot.mjs';
+import { localAddress, relevantLogs, mct, logMark, logsAfter, syncPack, prepareOptions, prepareEarlyDisplay, createSession } from '../lib/mc-pilot.mjs';
 import { developWorkflow, dryRunActions } from '../lib/workflow.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -452,6 +452,29 @@ test('visual options preserve unrelated settings and enable the generated pack',
   assert.match(result, /unrelated:true/); assert.match(result, /fov:0/); assert.match(result, /file\/harness-resources/);
 });
 
+test('early display preparation creates config and is idempotent', async t => {
+  const dir = await temp(t);
+  const file = path.join(dir, 'config/fml.toml');
+  await prepareEarlyDisplay(dir);
+  assert.equal(await readFile(file, 'utf8'), 'earlyWindowControl = false\n');
+  await prepareEarlyDisplay(dir);
+  assert.equal(await readFile(file, 'utf8'), 'earlyWindowControl = false\n');
+});
+
+test('early display preparation preserves comments, CRLF and unrelated table settings', async t => {
+  const dir = await temp(t);
+  const file = path.join(dir, 'config/fml.toml');
+  await mkdir(path.dirname(file));
+  const original = '# FML\r\n  earlyWindowControl = true # splash\r\nmaxThreads = -1\r\n[dependencyOverrides]\r\nearlyWindowControl = ["+example"]';
+  await writeFile(file, original);
+  await prepareEarlyDisplay(dir);
+  assert.equal(await readFile(file, 'utf8'), original.replace('= true', '= false'));
+  const withoutRootSetting = '# FML\n[dependencyOverrides]\nearlyWindowControl = ["+example"]';
+  await writeFile(file, withoutRootSetting);
+  await prepareEarlyDisplay(dir);
+  assert.equal(await readFile(file, 'utf8'), 'earlyWindowControl = false\n' + withoutRootSetting);
+});
+
 test('managed server stop sends a save/stop command before forced termination', async () => {
   const controller = new AbortController();
   const result = await run(process.execPath, ['-e', 'process.stdout.write("ready");process.stdin.on("data",s=>{if(s.toString()==="stop\\n"){process.stdout.write("saved");process.exit(0)}})'], {
@@ -487,7 +510,11 @@ test('real MC Pilot adapter batches mocked CLI actions and preserves worlds on c
     }
     const cli = args.slice(1); let data;
     if (cli[0] === 'client' && cli[1] === 'list') data = { clients: [{ name: 'mcmod-fixture', account: 'TestPlayer', loader: 'neoforge', mcVersion: '1.21.1', wsPort: 25580, running, launchArgs: ['--version-id', 'neoforge-21.1.252', '--game-dir', clientDir] }] };
-    else if (cli[0] === 'client' && cli[1] === 'launch') { assert.equal(cli[cli.indexOf('--ws-port') + 1], '25580'); running = true; launches++; await writeFile(path.join(dir, '.harness-artifacts/mct-home/logs/client-mcmod-fixture.log'), 'INFO joined\n'); data = {}; }
+    else if (cli[0] === 'client' && cli[1] === 'launch') {
+      assert.equal(await readFile(path.join(clientDir, 'config/fml.toml'), 'utf8'), 'earlyWindowControl = false\n');
+      assert.equal(cli[cli.indexOf('--ws-port') + 1], '25580'); running = true; launches++;
+      await writeFile(path.join(dir, '.harness-artifacts/mct-home/logs/client-mcmod-fixture.log'), 'INFO joined\n'); data = {};
+    }
     else if (cli[0] === 'client' && cli[1] === 'wait-ready') data = { connected: true, inWorld: true };
     else if (cli[0] === 'client' && cli[1] === 'stop') { running = false; data = { stopped: true }; }
     else data = { success: true, data: { x: 0.5 } };

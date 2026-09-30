@@ -24,6 +24,8 @@ MC Pilot0.16.0のv0.9.1 client mod URLは現在404のため、公式v0.14.0の1.
 
 専用client optionsは854×480、GUI scale2、en_us、FOV70、render distance8を使用します。world条件は [VISUAL_TESTING](../../docs/ai/VISUAL_TESTING.md)に沿ってscenarioが固定します。安全なresource reloadには専用loose packを使い、所有markerのあるassets/dataだけを置換します。
 
+専用clientの `config/fml.toml` はsetup時とsession起動前に `earlyWindowControl = false` を設定します。FML 4.0.44はGLFW初期化に成功しても1秒を超えるとERRORを出すため、[公式の回避方法](https://neoforged.net/meta/displayerrors/)で早期スプラッシュ表示を無効化します。既存の他の設定は保持します。早期表示のGL機能に依存するModの検証には、この設定の再検討が必要です。
+
 `## Verification` のAC割当は起動前に逆方向も検証します。`phase: 'after-restart'` のscenarioは通常batchを保存終了した後、次のsessionで実行します。persistence検証ではsetupで対象を再作成しないでください。
 
 ## Multiplayer
