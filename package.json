@@ -4,7 +4,7 @@
   "type": "module",
   "engines": { "node": ">=20" },
   "scripts": {
-    "test": "node --test harness/test/harness.test.mjs",
+    "test": "node --test harness/test/harness.test.mjs harness/test/multiplayer.test.mjs",
     "doctor": "node harness/cli.mjs doctor",
     "validate": "node harness/cli.mjs validate",
     "develop": "node harness/cli.mjs develop"

@@ -49,10 +49,12 @@ CodexはspecのMod IDに合わせMDK sampleを更新し、機能と必要なtest
 | `review-harness` | static検証後、実Claude Opusによる独立read-only review |
 | `develop --dry-run` | 同じ状態遷移engineのmock実行。外部AI・Gradle・Minecraft起動なし |
 | `develop` | spec→実装→静的検証→compile/test→review/fix→build→GameTest→必要なE2E→visual |
-| `setup-runtime [--accept-eula]` | exact NeoForge client/server準備。ゲームは起動せず、EULAは本人の明示操作のみ |
+| `setup-runtime [--accept-eula] [--players=N]` | 指定台数のexact NeoForge clientと共通serverを準備。EULAは本人の明示操作のみ |
 | `npm test` | Node built-in runnerによるharness self-tests |
 
 表のcommandは `node harness/cli.mjs <command>` で実行します。GameTestがないfresh templateではnot-applicableにします。低コスト検証を先に完了し、完成候補だけをMinecraftへ持ち込みます。defaultはcode candidate/review3回、client boot2回、runtime/visual batch2回。resource-only修正は安全なloose pack reload、Java/registry/networking変更はrestartします。
+
+複数clientによる同期・同時操作・各視点の検証は [Multiplayer E2E](tests/e2e/README.md#multiplayer)を参照してください。起動予算には各clientを数えます。
 
 詳細は [workflow](docs/ai/DEVELOPMENT_WORKFLOW.md)、[testing](docs/ai/TESTING_POLICY.md)、[visual](docs/ai/VISUAL_TESTING.md)、[code quality](docs/ai/CODE_QUALITY.md)、[review policy](docs/ai/REVIEW_POLICY.md)、[architecture](docs/ai/HARNESS_ARCHITECTURE.md)。常時すべてをagentへ読ませる必要はありません。
 

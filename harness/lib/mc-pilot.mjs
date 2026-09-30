@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir, copyFile, stat, open, access, rm, readdir, rename, appendFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:net';
@@ -105,15 +105,19 @@ export async function loadScenarios(root, criteria) {
   const scenarios = [];
   for (const file of await walk(path.join(root, 'tests/e2e/scenarios'))) {
     if (!file.endsWith('.scenario.mjs')) continue;
-    const scenario = (await import(`${pathToFileURL(path.join(root, 'tests/e2e/scenarios', file))}?run=${Date.now()}`)).default;
+    const scenario = (await import(`${pathToFileURL(path.join(root, 'tests/e2e/scenarios', file))}?run=${randomUUID()}`)).default;
     if (!/^[a-z0-9-]+$/.test(scenario.id) || scenarios.some(item => item.id === scenario.id)) throw new Error(`Invalid/duplicate scenario id: ${file}`);
     if (!Array.isArray(scenario.acceptanceCriteria) || !scenario.acceptanceCriteria.length || scenario.acceptanceCriteria.some(id => !criteria.includes(id))) throw new Error(`Scenario has unknown/missing acceptance criteria: ${file}`);
     if (typeof scenario.visual !== 'boolean' || !Array.isArray(scenario.screenshots)) throw new Error(`Scenario needs visual and screenshots: ${file}`);
+    const players = scenario.players ?? 1;
+    if (!Number.isSafeInteger(players) || players < 1) throw new Error(`Scenario players must be a positive integer: ${file}`);
+    if (scenario.verification?.includes('multiplayer') && players < 2) throw new Error(`Multiplayer scenario requires at least two players: ${file}`);
     if (scenario.phase && !['candidate', 'after-restart'].includes(scenario.phase)) throw new Error(`Unknown scenario phase: ${file}`);
     for (const name of ['setup', 'actions', 'assertions', 'cleanup']) if (typeof scenario[name] !== 'function') throw new Error(`Scenario missing ${name}: ${file}`);
     if (scenario.visual && !scenario.screenshots.length) throw new Error(`Visual scenario has no screenshot points: ${file}`);
     for (const shot of scenario.screenshots) {
       if (!/^[a-z0-9-]+$/.test(shot.id) || typeof shot.prepare !== 'function' || typeof shot.assertState !== 'function' || !shot.criteria?.length) throw new Error(`Invalid screenshot point: ${file}`);
+      if (!Number.isInteger(shot.client ?? 0) || (shot.client ?? 0) < 0 || (shot.client ?? 0) >= players) throw new Error(`Screenshot client is outside scenario players: ${file}`);
     }
     if (new Set(scenario.screenshots.map(shot => shot.id)).size !== scenario.screenshots.length) throw new Error(`Duplicate screenshot id: ${file}`);
     scenarios.push(scenario);
@@ -134,7 +138,7 @@ async function portIsFree(port) {
 
 // A prepared NeoForge server is used because MC Pilot 0.16 has no NeoForge server installer.
 // Only this adapter knows the MC Pilot instance layout; the rest uses its public CLI.
-export async function createSession(root, runner, dir, { checkPort = portIsFree, runtimeRoot = root, serverDirectory = path.join(runtimeRoot, '.harness-artifacts/server') } = {}) {
+export async function createSession(root, runner, dir, { checkPort = portIsFree, runtimeRoot = root, serverDirectory = path.join(runtimeRoot, '.harness-artifacts/server'), playerCount = 1 } = {}) {
   await mkdir(dir, { recursive: true });
   let commandNumber = 0;
   const pilot = async args => {
@@ -147,23 +151,28 @@ export async function createSession(root, runner, dir, { checkPort = portIsFree,
   let config;
   try { config = JSON.parse(await readFile(configFile, 'utf8')); }
   catch { throw new Error('E2E runtime not prepared; follow tests/e2e/README.md (.harness-artifacts/e2e-runtime.json)'); }
-  if (!/^mcmod-[a-z0-9-]+$/.test(config.client)) throw new Error('Use a dedicated MC Pilot client name starting with mcmod-');
+  const names = config.clients ?? [config.client];
+  if (!Number.isSafeInteger(playerCount) || playerCount < 1 || !Array.isArray(names) || names.length < playerCount) throw new Error(`Prepare ${playerCount} clients with setup-runtime --players=${playerCount}`);
+  if (names.some(name => !/^mcmod-[a-z0-9-]+$/.test(name)) || new Set(names).size !== names.length) throw new Error('Use distinct dedicated MC Pilot client names starting with mcmod-');
   const port = localAddress(config.address);
   const home = mctEnv(runtimeRoot).MCT_HOME;
-  const clientDir = path.join(home, 'clients', config.client, 'minecraft');
   const serverDir = serverDirectory;
   const props = await readFile(path.join(root, 'gradle.properties'), 'utf8');
   const neo = props.match(/^neo_version=(.+)$/m)[1].trim();
-  const client = (await pilot(['client', 'list'])).clients.find(item => item.name === config.client);
-  if (!client || client.loader !== 'neoforge' || client.mcVersion !== '1.21.1') throw new Error('Prepared MC Pilot NeoForge 1.21.1 client not found');
-  if (client.running) throw new Error('Refusing to take over an already running client; stop your own test session first');
-  if (!Number.isInteger(client.wsPort) || client.wsPort < 1024 || client.wsPort > 65535 || client.wsPort === port) throw new Error('Client WebSocket port must be a separate local unprivileged port');
-  const launch = client.launchArgs ?? [];
-  const versionIndex = launch.indexOf('--version-id');
-  const versionId = versionIndex >= 0 ? launch[versionIndex + 1] : undefined;
-  if (!versionId?.endsWith(`-${neo}`)) throw new Error(`MC Pilot client loader ${versionId ?? 'unknown'} does not match MDK NeoForge ${neo}; provision matching runtime before E2E`);
-  const gameDirIndex = launch.indexOf('--game-dir');
-  if (gameDirIndex < 0 || path.resolve(launch[gameDirIndex + 1]) !== clientDir) throw new Error('MC Pilot launch game directory must be the dedicated harness client directory');
+  const listed = (await pilot(['client', 'list'])).clients;
+  const clients = names.slice(0, playerCount).map(name => {
+    const client = listed.find(item => item.name === name);
+    if (!client || client.loader !== 'neoforge' || client.mcVersion !== '1.21.1') throw new Error(`Prepared MC Pilot NeoForge 1.21.1 client not found: ${name}`);
+    if (client.running) throw new Error(`Refusing to take over an already running client: ${name}`);
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(client.account)) throw new Error(`Dedicated client needs an offline username: ${name}`);
+    const gameDir = path.join(home, 'clients', name, 'minecraft');
+    const launch = client.launchArgs ?? [];
+    const versionId = launch[launch.indexOf('--version-id') + 1];
+    if (!launch.includes('--version-id') || !versionId?.endsWith(`-${neo}`)) throw new Error(`MC Pilot client loader does not match MDK NeoForge ${neo}: ${name}`);
+    if (!launch.includes('--game-dir') || path.resolve(launch[launch.indexOf('--game-dir') + 1]) !== gameDir) throw new Error('MC Pilot launch game directory must be the dedicated harness client directory');
+    return { name, account: client.account, gameDir, log: path.join(home, 'logs', `client-${name}.log`), resourcePack: path.join(gameDir, 'resourcepacks/harness-resources') };
+  });
+  if (new Set(clients.map(client => client.account.toLowerCase())).size !== clients.length) throw new Error('Multiplayer clients must have distinct offline usernames');
   const eula = await readFile(path.join(serverDir, 'eula.txt'), 'utf8');
   if (!/^eula=true\s*$/m.test(eula)) throw new Error('Accept Minecraft EULA manually in the dedicated server/eula.txt');
   const serverProps = await readFile(path.join(serverDir, 'server.properties'), 'utf8');
@@ -173,20 +182,21 @@ export async function createSession(root, runner, dir, { checkPort = portIsFree,
   const argumentFile = path.join(serverDir, `libraries/net/neoforged/neoforge/${neo}/${process.platform === 'win32' ? 'win' : 'unix'}_args.txt`);
   await access(argumentFile);
   const serverLog = path.join(serverDir, 'logs/latest.log');
-  const clientLog = path.join(home, 'logs', `client-${config.client}.log`);
   const allowlist = JSON.parse(await readFile(path.join(root, 'harness/log-allowlist.json'), 'utf8'));
-  const resourcePack = path.join(clientDir, 'resourcepacks/harness-resources');
   const dataPack = path.join(serverDir, 'world/datapacks/harness-data');
-  let alive = false, controller, serverProcess, ownedClient = false, startupClientMark = 0;
-  const query = args => {
+  let alive = false, controller, serverProcess, pendingReload;
+  let reloads = 0;
+  const ownedClients = new Set();
+  const query = (args, index = 0) => {
+    if (!Number.isInteger(index) || index < 0 || index >= clients.length) throw new Error('Unknown session client');
     if (args[0].startsWith('-') || args.some(arg => /^--(?:client|project|profile)(?:=|$)/.test(arg)) ||
       ['client', 'server', 'up', 'down', 'prune', 'init', 'deploy', 'plugin', 'skill'].includes(args[0])) throw new Error('Scenario cannot manage Minecraft lifecycle or override the test target');
-    return pilot(['--client', config.client, ...args]);
+    return pilot(['--client', clients[index].name, ...args]);
   };
   async function stop() {
     const failures = [];
-    if (ownedClient) {
-      try { await pilot(['client', 'stop', config.client]); ownedClient = false; }
+    for (const name of ownedClients) {
+      try { await pilot(['client', 'stop', name]); ownedClients.delete(name); }
       catch (error) { failures.push(error.message); }
     }
     if (serverProcess) {
@@ -194,28 +204,28 @@ export async function createSession(root, runner, dir, { checkPort = portIsFree,
       if (result.code !== 0 || result.signal) failures.push('Dedicated server did not stop normally; inspect server-process.json');
     }
     await save(path.join(dir, 'shutdown.json'), { ok: !failures.length, failures, at: new Date().toISOString() });
-    if (failures.length) throw new Error(`E2E cleanup failed: ${failures.join('; ')}`);
+    if (failures.length) throw Object.assign(new Error(`E2E cleanup failed: ${failures.join('; ')}`), { code: 'CLEANUP_FAILED' });
   }
   async function start() {
+    pendingReload = undefined;
     await checkPort(port);
-    // MC Pilot's Java WebSocket server cannot immediately rebind a TIME_WAIT port
-    // on macOS. Its public launch override avoids reusing the previous session port.
-    const websocketPort = await checkPort(0);
-    await syncPack(root, resourcePack, 'assets');
     await syncPack(root, dataPack, 'data');
-    await prepareOptions(clientDir);
+    for (const client of clients) {
+      await syncPack(root, client.resourcePack, 'assets');
+      await prepareOptions(client.gameDir);
+    }
     const buildProperties = await readFile(path.join(root, 'gradle.properties'), 'utf8');
     const modId = buildProperties.match(/^mod_id=(.+)$/m)?.[1].trim();
     const modVersion = buildProperties.match(/^mod_version=(.+)$/m)?.[1].trim();
     if (!modId || !modVersion) throw new Error('gradle.properties must define mod_id and mod_version for the MDK archive');
     const jar = path.join(root, 'build/libs', `${modId}-${modVersion}.jar`);
     await access(jar);
-    for (const base of [serverDir, clientDir]) {
+    for (const base of [serverDir, ...clients.map(client => client.gameDir)]) {
       await mkdir(path.join(base, 'mods'), { recursive: true });
       await copyFile(jar, path.join(base, 'mods/harness-under-test.jar'));
     }
     controller = new AbortController();
-    startupClientMark = await logMark(clientLog);
+    const startup = { ...await mark('startup'), server: 0 };
     let ready = false;
     alive = true;
     serverProcess = runner(config.java || 'java', ['-Xmx2G', `@${argumentFile}`, '--nogui'], { cwd: serverDir,
@@ -230,63 +240,88 @@ export async function createSession(root, runner, dir, { checkPort = portIsFree,
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     if (!ready) throw new Error('NeoForge server failed to become ready within 120 seconds');
-    ownedClient = true;
-    const result = await pilot(['client', 'launch', config.client, '--server', config.address, '--ws-port', String(websocketPort)]);
-    await save(path.join(dir, 'client-launch.json'), result);
-    try { await readyClient(); }
+    try {
+      for (const client of clients) {
+        // Choose after the previous launch is ready, so ports cannot collide or reuse TIME_WAIT.
+        const websocketPort = await checkPort(0);
+        ownedClients.add(client.name);
+        const result = await pilot(['client', 'launch', client.name, '--server', config.address, '--ws-port', String(websocketPort)]);
+        await save(path.join(dir, `client-launch-${client.name}.json`), result);
+        await readyClients([client]);
+      }
+      await readyClients();
+    }
     catch (error) {
-      try { await logs({ id: 'startup', server: 0, client: startupClientMark }); }
+      try { await logs(startup); }
       catch (logError) { throw new Error(`${error.message}\n${logError.message}`); }
       throw error;
     }
-    await logs({ id: 'startup', server: 0, client: startupClientMark });
+    await logs(startup);
   }
-  async function readyClient() {
+  async function readyClients(required = clients) {
     if (!alive) throw new Error('NeoForge server process exited');
     const list = await pilot(['client', 'list']);
-    if (!list.clients.some(item => item.name === config.client && item.running)) throw new Error('Minecraft client is not alive');
-    const ready = await pilot(['client', 'wait-ready', config.client, '--timeout', '120']);
-    if (!ready.connected || !ready.inWorld) throw new Error('Minecraft client is not connected to a world');
+    for (const client of required) {
+      if (!list.clients.some(item => item.name === client.name && item.running)) throw new Error(`Minecraft client is not alive: ${client.name}`);
+      const ready = await pilot(['client', 'wait-ready', client.name, '--timeout', '120']);
+      if (!ready.connected || !ready.inWorld) throw new Error(`Minecraft client is not connected to a world: ${client.name}`);
+    }
+  }
+  async function mark(id) {
+    return { id, server: await logMark(serverLog), clients: await Promise.all(clients.map(client => logMark(client.log))) };
   }
   async function logs(mark) {
-    const text = (await logsAfter(serverLog, mark.server)) + '\n' + (await logsAfter(clientLog, mark.client));
-    const errors = relevantLogs(text, allowlist);
+    const sources = [['server', serverLog, mark.server], ...clients.map((client, index) => [client.name, client.log, mark.clients[index]])];
+    const excerpts = [];
+    for (const [name, file, offset] of sources) {
+      const errors = relevantLogs(await logsAfter(file, offset), allowlist);
+      if (errors) excerpts.push(`[${name}]\n${errors}`);
+    }
+    const errors = excerpts.join('\n').slice(0, 12_000);
     await save(path.join(dir, `logs-${mark.id}.txt`), errors || 'No relevant errors in this scenario window.');
     if (errors) throw new Error(`Relevant runtime errors:\n${errors}`);
   }
-  return { query, start, stop, ready: readyClient,
-    mark: async id => ({ id, server: await logMark(serverLog), client: await logMark(clientLog) }), logs,
+  return { query, start, stop, ready: readyClients, playerCount: clients.length, mark, logs,
     async reload(kinds) {
+      pendingReload = await mark(`reload-${++reloads}`);
       // Loose resource/data packs must already be activated by fixture setup; JAR hot replacement is unsafe.
       if (kinds.includes('resources')) {
-        await syncPack(root, resourcePack, 'assets');
-        await query(['input', 'key', 'combo', 'f3', 't']);
+        for (const [index, client] of clients.entries()) {
+          await syncPack(root, client.resourcePack, 'assets');
+          await query(['input', 'key', 'combo', 'f3', 't'], index);
+        }
       }
       if (kinds.includes('data')) {
         await syncPack(root, dataPack, 'data');
         await query(['chat', 'command', 'reload']);
       }
-      await readyClient();
+      await readyClients();
+      await logs(pendingReload);
     },
     async batch(scenarios, iteration) {
       const screenshots = [], results = [];
       for (const scenario of scenarios) {
-        const mark = await this.mark(`${iteration}-${scenario.id}`);
-        const context = { mct: query };
+        const mark = pendingReload ?? await this.mark(`${iteration}-${scenario.id}`);
+        pendingReload = undefined;
+        const count = scenario.players ?? 1;
+        if (count > clients.length) throw new Error(`Scenario ${scenario.id} requires ${count} prepared clients`);
+        const context = { mct: query, clients: clients.slice(0, count).map((client, index) => ({ name: client.account, mct: args => query(args, index) })) };
         try {
-          await readyClient();
+          await readyClients();
           await scenario.setup(context); await scenario.actions(context); await scenario.assertions(context);
           await logs(mark);
           if (scenario.visual) for (const point of scenario.screenshots) {
-            await point.prepare(context); await readyClient(); await point.assertState(context); await logs(mark);
+            const index = point.client ?? 0;
+            const view = { ...context, mct: context.clients[index].mct };
+            await point.prepare(view); await readyClients(); await point.assertState(view); await logs(mark);
             const file = path.join(dir, `${iteration}-${scenario.id}-${point.id}.png`);
-            await query(['screenshot', '--output', file]);
+            await query(['screenshot', '--output', file], index);
             const bytes = await readFile(file);
             if (!bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error('Screenshot is not PNG');
-            screenshots.push({ file, scenario: scenario.id, criteria: point.criteria, acceptanceCriteria: scenario.acceptanceCriteria,
+            screenshots.push({ file, scenario: scenario.id, client: clients[index].name, player: clients[index].account, criteria: point.criteria, acceptanceCriteria: scenario.acceptanceCriteria,
               framebuffer: { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) } });
           }
-          results.push({ id: scenario.id, status: 'pass' });
+          results.push({ id: scenario.id, status: 'pass', players: context.clients.map(client => client.name) });
         } catch (error) {
           await save(path.join(dir, `e2e-${iteration}.json`), { status: 'failed', scenario: scenario.id, error: error.message, results, screenshots });
           throw error;
@@ -340,8 +375,9 @@ export async function runtimeVersions(root) {
   if (!args.includes('21.1.252') || !args.includes('1.21.1')) throw new Error('Installed server arguments do not match exact target versions');
   return { minecraft: '1.21.1', neoForge: '21.1.252', pilotCli: '0.16.0', pilotMod: pilotMod.version, pilotModRelease: pilotMod.release, runtimeRoot, versionId, argumentFile };
 }
-export async function setupRuntime(root, runner, dir, { acceptEula = false, clientName = 'mcmod-development' } = {}) {
+export async function setupRuntime(root, runner, dir, { acceptEula = false, clientName = 'mcmod-development', playerCount = 1 } = {}) {
   if (Number(process.versions.node.split('.')[0]) >= 26) throw new Error('MC Pilot 0.16.0 undici dispatcher is incompatible with Node 26 fetch; run setup-runtime with Node 22 LTS');
+  if (!Number.isSafeInteger(playerCount) || playerCount < 1 || !/^mcmod-[a-z0-9-]+$/.test(clientName)) throw new Error('Use a positive player count and a dedicated mcmod- client name');
   const home = mctEnv(root).MCT_HOME, cache = mctEnv(root).MCT_CACHE_DIR;
   const server = path.join(root, '.harness-artifacts/server');
   await mkdir(server, { recursive: true });
@@ -365,10 +401,15 @@ export async function setupRuntime(root, runner, dir, { acceptEula = false, clie
   await save(path.join(dir, 'discovery.json'), await discover(root, runner));
   await download(pilotMod.url, path.join(cache, 'mod/mct-client-mod-neoforge-1.21.1.jar'), pilotMod.sha256);
   const list = await mct(root, runner, ['client', 'list']);
-  const client = list.clients.find(item => item.name === clientName);
-  if (client?.running) throw new Error('Stop the existing test client before setup-runtime');
-  if (!client) await save(path.join(dir, 'client-create.json'), await mct(root, runner,
-    ['client', 'create', clientName, '--version', '1.21.1', '--loader', 'neoforge', '--ws-port', '25576', '--account', 'HarnessBot', '--mute', '--java', java], 1_200_000));
+  if (list.clients.some(client => client.running)) throw new Error('Stop the existing test clients before setup-runtime');
+  const clients = Array.from({ length: playerCount }, (_, index) => ({
+    name: index === 0 ? clientName : `${clientName}-${index + 1}`,
+    account: index === 0 ? 'HarnessBot' : `HarnessBot${index + 1}`
+  }));
+  for (const client of clients) if (!list.clients.some(item => item.name === client.name)) {
+    await save(path.join(dir, `client-create-${client.name}.json`), await mct(root, runner,
+      ['client', 'create', client.name, '--version', '1.21.1', '--loader', 'neoforge', '--account', client.account, '--mute', '--java', java], 1_200_000));
+  }
   const runtimeRoot = path.join(cache, 'client/runtime/1.21.1');
   const installer = path.join(cache, 'neoforge-21.1.252-installer.jar');
   await download('https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.252/neoforge-21.1.252-installer.jar', installer,
@@ -380,23 +421,25 @@ export async function setupRuntime(root, runner, dir, { acceptEula = false, clie
     await save(path.join(dir, `${side}-installer.json`), result); requireSuccess(result, `NeoForge ${side} installer`);
   }
   const versions = await runtimeVersions(root);
-  const instance = path.join(home, 'clients', clientName, 'instance.json');
-  const meta = JSON.parse(await readFile(instance, 'utf8'));
-  if (meta.loader !== 'neoforge' || meta.mcVersion !== '1.21.1' || meta.account !== 'HarnessBot') throw new Error('Unexpected MC Pilot instance identity');
-  const gameDir = path.join(home, 'clients', clientName, 'minecraft');
-  await save(path.join(dir, 'original-instance.json'), meta);
-  meta.launchArgs = ['--runtime-root', runtimeRoot, '--version-id', versions.versionId, '--game-dir', gameDir, '--max-mem', '2g'];
-  meta.javaCommand = java;
-  await save(instance + '.partial', meta); await rename(instance + '.partial', instance);
-  await writeFile(path.join(server, 'server.properties'), ['server-ip=127.0.0.1', 'server-port=25575', 'online-mode=false', 'enforce-secure-profile=false', 'level-name=world', 'level-seed=1211', 'gamemode=creative', 'difficulty=peaceful', 'spawn-protection=0', 'view-distance=8', 'simulation-distance=5', 'max-players=2', 'enable-rcon=false', 'enable-query=false', 'motd=Local harness qualification'].join('\n') + '\n');
-  await save(path.join(server, 'ops.json'), [{ uuid: offlineUuid('HarnessBot'), name: 'HarnessBot', level: 4, bypassesPlayerLimit: true }]);
+  for (const client of clients) {
+    const instance = path.join(home, 'clients', client.name, 'instance.json');
+    const meta = JSON.parse(await readFile(instance, 'utf8'));
+    if (meta.loader !== 'neoforge' || meta.mcVersion !== '1.21.1' || meta.account !== client.account) throw new Error(`Unexpected MC Pilot instance identity: ${client.name}`);
+    const gameDir = path.join(home, 'clients', client.name, 'minecraft');
+    await save(path.join(dir, `original-instance-${client.name}.json`), meta);
+    meta.launchArgs = ['--runtime-root', runtimeRoot, '--version-id', versions.versionId, '--game-dir', gameDir, '--max-mem', '2g'];
+    meta.javaCommand = java;
+    await save(instance + '.partial', meta); await rename(instance + '.partial', instance);
+  }
+  await writeFile(path.join(server, 'server.properties'), ['server-ip=127.0.0.1', 'server-port=25575', 'online-mode=false', 'enforce-secure-profile=false', 'level-name=world', 'level-seed=1211', 'gamemode=creative', 'difficulty=peaceful', 'spawn-protection=0', 'view-distance=8', 'simulation-distance=5', `max-players=${Math.max(2, playerCount)}`, 'enable-rcon=false', 'enable-query=false', 'motd=Local harness qualification'].join('\n') + '\n');
+  await save(path.join(server, 'ops.json'), clients.map(client => ({ uuid: offlineUuid(client.account), name: client.account, level: 4, bypassesPlayerLimit: true })));
   const eulaFile = path.join(server, 'eula.txt');
   if (acceptEula) await writeFile(eulaFile, '# Explicit human acceptance via setup-runtime --accept-eula\neula=true\n');
   else { try { await access(eulaFile); } catch (error) { if (error.code !== 'ENOENT') throw error; await writeFile(eulaFile, 'eula=false\n'); } }
-  await save(path.join(root, '.harness-artifacts/e2e-runtime.json'), { client: clientName, address: '127.0.0.1:25575', java });
+  await save(path.join(root, '.harness-artifacts/e2e-runtime.json'), { clients: clients.map(client => client.name), address: '127.0.0.1:25575', java });
   const accepted = /^eula=true\s*$/m.test(await readFile(eulaFile, 'utf8'));
-  const result = { ...versions, eulaAccepted: accepted, prepared: true, gameStarted: false };
+  const result = { ...versions, clients, eulaAccepted: accepted, prepared: true, gameStarted: false };
   await save(path.join(dir, 'runtime.json'), result);
-  if (!accepted) throw new Error('Runtime prepared. Read https://www.minecraft.net/en-us/eula then explicitly run: node harness/cli.mjs setup-runtime --accept-eula');
+  if (!accepted) throw new Error(`Runtime prepared. Read https://www.minecraft.net/en-us/eula then explicitly run: node harness/cli.mjs setup-runtime --accept-eula --players=${playerCount}`);
   return result;
 }

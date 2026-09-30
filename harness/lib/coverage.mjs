@@ -27,7 +27,7 @@ export async function acceptanceCoverage(root, dir) {
       if (!scenario || extra.length || (row.method !== 'visual' && point)) errors.push(`${row.ac}: invalid scenario reference ${row.evidence}`);
       else if (row.method === 'visual' && (!scenario.visual || !scenario.screenshots.some(shot => shot.id === point))) errors.push(`${row.ac}: visual evidence must name a screenshot point`);
       else if (row.method === 'persistence' && scenario.phase !== 'after-restart') errors.push(`${row.ac}: persistence requires an after-restart scenario`);
-      else if (row.method === 'multiplayer' && !scenario.verification?.includes('multiplayer')) errors.push(`${row.ac}: scenario must explicitly verify multiplayer behavior`);
+      else if (row.method === 'multiplayer' && (!scenario.verification?.includes('multiplayer') || (scenario.players ?? 1) < 2)) errors.push(`${row.ac}: multiplayer evidence requires at least two players and explicit multiplayer verification`);
     } else if (['unit', 'gametest', 'static'].includes(row.method)) {
       const file = row.evidence;
       if (!/^src\//.test(file) || file.includes('..') || file.includes('\\') || path.isAbsolute(file)) { errors.push(`${row.ac}: invalid evidence path`); continue; }

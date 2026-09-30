@@ -26,4 +26,6 @@
 
 Methodは `unit`（src/testの@Test source）、`static`（src/main/generated resource）、`gametest`（登録された@GameTest source）、`e2e`（scenario id）、`visual`（scenario id/screenshot id）、`multiplayer`（multiplayerを明示するscenario）、`persistence`（after-restart scenario）です。仕様の性質に合う方法を選び、画像ACをunitだけで済ませたり、保存ACをcodec testだけで済ませたりしないでください。適切さは独立code reviewでも確認します。specには行動と期待結果を書き、実装のclass分割を指示しません。
 
+multiplayer要件では人数、各playerの操作と観測結果、同時操作時の結果を明記します。複数clientでの検証方法は [Multiplayer E2E](../tests/e2e/README.md#multiplayer)を参照してください。
+
 表は形式の説明です。ID・path・ファイル名はproject側で定め、ハーネス本体や共通文書へ転記しません。

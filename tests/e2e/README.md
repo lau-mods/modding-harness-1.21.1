@@ -24,7 +24,31 @@ MC Pilot0.16.0のv0.9.1 client mod URLは現在404のため、公式v0.14.0の1.
 
 専用client optionsは854×480、GUI scale2、en_us、FOV70、render distance8を使用します。world条件は [VISUAL_TESTING](../../docs/ai/VISUAL_TESTING.md)に沿ってscenarioが固定します。安全なresource reloadには専用loose packを使い、所有markerのあるassets/dataだけを置換します。
 
-`## Verification` のAC割当は起動前に逆方向も検証します。`phase: 'after-restart'` のscenarioは通常batchを保存終了した後、2回目のsessionで実行します。persistence検証ではsetupで対象を再作成しないでください。multiplayerを検証するscenarioには `verification: ['multiplayer']` を記載し、実際に専用serverとの同期（仕様に複数playerがあれば全player）をassertします。
+`## Verification` のAC割当は起動前に逆方向も検証します。`phase: 'after-restart'` のscenarioは通常batchを保存終了した後、次のsessionで実行します。persistence検証ではsetupで対象を再作成しないでください。
+
+## Multiplayer
+
+`node harness/cli.mjs setup-runtime --players=2` で、異なるoffline usernameと専用game directoryを持つ2clientを準備します。省略時は1clientです。既存worldを維持し、全clientへ同じMod JARを配備します。接続先は共通のローカルNeoForge serverです。
+
+setupを再実行すると、準備済みの人数設定を置き換えます。EULA同意時も `setup-runtime --accept-eula --players=2` のように人数を指定してください。人数を減らしても既存clientのdirectoryやworldは削除しません。
+
+scenarioに `players: 2` と `verification: ['multiplayer']` を指定します。multiplayerのVerification割当には2人以上が必要です。関数へ渡す `clients` は宣言した台数の配列で、各要素は実player名の `name` と、そのclientだけを操作する `mct(args)` を持ちます。既存の `{mct}` は先頭clientを操作します。
+
+```js
+async actions({ clients }) {
+  const [actor, observer] = clients;
+  await actor.mct(['gui', 'close']);
+  await observer.mct(['gui', 'close']);
+}
+```
+
+assertionsでは仕様に沿って、操作側・観測側の両方の状態を確認します。同時操作が必要なら `Promise.all` を使います。serverへ1人が接続できるだけの確認は `e2e` として扱います。
+
+screenshot pointの `client: 1` は2人目を撮影します（0始まり、省略時0）。そのpointの `prepare` / `assertState` の `{mct}` も撮影対象を操作します。画像artifactにはclientとplayer名を記録します。
+
+batch全体で必要な最大台数を起動し、全scenarioの間接続を維持します。追加clientはscenarioごとに起動しません。全clientのreadinessとlogを検査し、resource reloadは全client、data reloadはserverへ1回実行します。終了処理は途中で失敗しても残りのclientとserverを停止します。
+
+`gameBoots` はclient起動数です。既定値2では2人のbatchを1session実行でき、2人でrestart/persistenceや修正確認を行うには4以上が必要です。必要数を起動前に予算へ計上し、部分起動の失敗でも返却しません。summaryの `sessions` はserver起動試行数です。修正中に必要人数が増えた場合は停止し、runtimeと予算を確認して新しいrunを開始します。
 
 MC PilotにはNeoForge server createがないため、harnessは上記専用serverをJavaで起動し、client操作はMC Pilotだけを使います。1回の起動で全scenarioを実行し、finallyで所有するprocessを停止します。clientから接続できるserver addressはliteralな127.0.0.1のみです。scenarioは信頼されたrepository codeなので、Node自体の任意コード実行能力をsandboxするものではありません。reviewでネットワーク操作やlifecycleの迂回を拒否してください。
 

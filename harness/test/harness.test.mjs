@@ -329,7 +329,7 @@ test('real MC Pilot adapter batches mocked CLI actions and preserves worlds on c
       return { ok: true, code: 0, signal: null, stdout: 'stopped', stderr: '' };
     }
     const cli = args.slice(1); let data;
-    if (cli[0] === 'client' && cli[1] === 'list') data = { clients: [{ name: 'mcmod-fixture', loader: 'neoforge', mcVersion: '1.21.1', wsPort: 25580, running, launchArgs: ['--version-id', 'neoforge-21.1.252', '--game-dir', clientDir] }] };
+    if (cli[0] === 'client' && cli[1] === 'list') data = { clients: [{ name: 'mcmod-fixture', account: 'TestPlayer', loader: 'neoforge', mcVersion: '1.21.1', wsPort: 25580, running, launchArgs: ['--version-id', 'neoforge-21.1.252', '--game-dir', clientDir] }] };
     else if (cli[0] === 'client' && cli[1] === 'launch') { assert.equal(cli[cli.indexOf('--ws-port') + 1], '25580'); running = true; launches++; await writeFile(path.join(dir, '.harness-artifacts/mct-home/logs/client-mcmod-fixture.log'), 'INFO joined\n'); data = {}; }
     else if (cli[0] === 'client' && cli[1] === 'wait-ready') data = { connected: true, inWorld: true };
     else if (cli[0] === 'client' && cli[1] === 'stop') { running = false; data = { stopped: true }; }
@@ -386,7 +386,7 @@ test('AC coverage validates reverse scenario/visual/persistence mappings', async
   await mkdir(path.join(dir, 'tests/e2e/scenarios'), { recursive: true });
   await writeFile(path.join(dir, 'spec/PROJECT.md'), specification);
   for (const [id, ac, phase, visual] of [['case-a', ['AC-A', 'AC-D'], 'candidate', true], ['case-b', ['AC-B'], 'after-restart', false], ['case-c', ['AC-C'], 'candidate', false]]) {
-    await writeFile(path.join(dir, `tests/e2e/scenarios/${id}.scenario.mjs`), `export default {id:${JSON.stringify(id)},acceptanceCriteria:${JSON.stringify(ac)},phase:${JSON.stringify(phase)},visual:${visual},verification:['multiplayer'],setup:async()=>{},actions:async()=>{},assertions:async()=>{},cleanup:async()=>{},screenshots:${visual ? "[{id:'point',criteria:['Synthetic visual requirement.'],prepare:async()=>{},assertState:async()=>{}}]" : '[]'}}`);
+    await writeFile(path.join(dir, `tests/e2e/scenarios/${id}.scenario.mjs`), `export default {id:${JSON.stringify(id)},acceptanceCriteria:${JSON.stringify(ac)},phase:${JSON.stringify(phase)},visual:${visual},players:2,verification:['multiplayer'],setup:async()=>{},actions:async()=>{},assertions:async()=>{},cleanup:async()=>{},screenshots:${visual ? "[{id:'point',criteria:['Synthetic visual requirement.'],prepare:async()=>{},assertState:async()=>{}}]" : '[]'}}`);
   }
   assert.equal((await acceptanceCoverage(dir, path.join(dir, 'evidence'))).percent, 100);
   await writeFile(path.join(dir, 'spec/PROJECT.md'), specification.replace('case-a/point', 'case-a/missing'));

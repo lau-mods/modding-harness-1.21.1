@@ -13,9 +13,11 @@ import { developWorkflow, dryRunActions } from './lib/workflow.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [command, ...flags] = process.argv.slice(2);
+const playerFlags = flags.filter(flag => flag.startsWith('--players='));
+const playerCount = playerFlags.length ? Number(playerFlags[0].slice('--players='.length)) : 1;
 const allowed = { doctor: [], validate: ['--static', '--build'], 'review-harness': [], develop: ['--dry-run'], 'setup-runtime': ['--accept-eula'] };
-if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].includes(flag)) || (flags.includes('--static') && flags.includes('--build'))) {
-  console.error('Usage: node harness/cli.mjs doctor | validate [--static|--build] | review-harness | develop [--dry-run] | setup-runtime [--accept-eula]');
+if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].includes(flag) && !(command === 'setup-runtime' && /^--players=[1-9]\d*$/.test(flag))) || playerFlags.length > 1 || !Number.isSafeInteger(playerCount) || (flags.includes('--static') && flags.includes('--build'))) {
+  console.error('Usage: node harness/cli.mjs doctor | validate [--static|--build] | review-harness | develop [--dry-run] | setup-runtime [--accept-eula] [--players=N]');
   process.exitCode = 2;
 } else {
   const id = `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}`;
@@ -27,7 +29,7 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
     const config = await loadConfig(root);
     if (command === 'setup-runtime') {
       lock = await open(lockPath, 'wx'); await lock.writeFile(JSON.stringify({ pid: process.pid, dir }));
-      console.log(await setupRuntime(root, run, dir, { acceptEula: flags.includes('--accept-eula') }));
+      console.log(await setupRuntime(root, run, dir, { acceptEula: flags.includes('--accept-eula'), playerCount }));
     } else if (command === 'doctor') {
       const result = await doctor(root, run); await save(path.join(dir, 'doctor.json'), result);
       for (const check of result.checks) console.log(`${check.ok ? 'OK' : 'MISSING'} ${check.name}: ${check.detail}`);
@@ -106,7 +108,11 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
           scenarios = (await acceptanceCoverage(root, candidateDir)).scenarios;
           if (!scenarios.length) throw new Error('Runtime changes require acceptance-linked *.scenario.mjs coverage');
           if (classify(changed).visual && !scenarios.some(scenario => scenario.visual)) throw new Error('Visual changes require a scenario with visual criteria and screenshots');
-          session = await createSession(root, run, path.join(dir, 'runtime'));
+          const playerCount = Math.max(...scenarios.map(s => s.players ?? 1));
+          const requiredBoots = playerCount * (scenarios.some(s => s.phase === 'after-restart') ? 2 : 1);
+          if (requiredBoots > config.budgets.gameBoots) throw new Error(`Scenarios require at least ${requiredBoots} client boots; gameBoots is ${config.budgets.gameBoots}`);
+          session = await createSession(root, run, path.join(dir, 'runtime'), { playerCount });
+          return session.playerCount;
         },
         start: () => session.start(), stop: async () => { if (session) await session.stop(); },
         async e2e(cycle) {
@@ -124,6 +130,7 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
           try { await session.ready(); } catch { classification.restart = true; }
           scenarios = await loadScenarios(root, spec.criteria);
           if (!scenarios.length || (classify(changed).visual && !scenarios.some(scenario => scenario.visual))) throw new Error('Required E2E/visual coverage was removed during correction');
+          if (scenarios.some(s => (s.players ?? 1) > session.playerCount)) throw new Error('Correction requires more clients; prepare the runtime and start a new development run');
           return classification;
         },
         reload: kinds => session.reload(kinds)

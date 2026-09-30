@@ -1,6 +1,6 @@
 // The same bounded state machine drives real runs and injected dry-run/test actions.
 export async function developWorkflow(actions, budgets) {
-  const state = { status: 'running', codeAttempts: 0, codeReviews: 0, boots: 0, visualReviews: 0, events: [] };
+  const state = { status: 'running', codeAttempts: 0, codeReviews: 0, boots: 0, sessions: 0, visualReviews: 0, events: [] };
   const step = async (name, fn) => {
     state.events.push(name);
     await actions.record(state);
@@ -32,8 +32,9 @@ export async function developWorkflow(actions, budgets) {
     throw new Error('Code review/fix budget exhausted; inspect the latest findings or test failures');
   }
   async function boot() {
-    if (state.boots >= budgets.gameBoots) throw Object.assign(new Error('Game boot budget exhausted; inspect runtime/visual evidence'), { code: 'BOOT_BUDGET' });
-    state.boots++;
+    if (state.boots + state.players > budgets.gameBoots) throw Object.assign(new Error('Game boot budget exhausted; inspect runtime/visual evidence'), { code: 'BOOT_BUDGET' });
+    state.boots += state.players;
+    state.sessions++;
     await step('minecraft-start', () => actions.start());
   }
   try {
@@ -42,7 +43,8 @@ export async function developWorkflow(actions, budgets) {
     let changes = await actions.classify();
     if (changes.e2e) {
       // Scenario/precondition validation happens before spending a boot.
-      await step('e2e-preflight', () => actions.preflight());
+      state.players = await step('e2e-preflight', () => actions.preflight());
+      if (!Number.isSafeInteger(state.players) || state.players < 1) throw new Error('E2E preflight must return a positive client count');
       await boot();
       let accepted = false;
       for (let cycle = 0; cycle < budgets.visualReviews; cycle++) {
@@ -56,7 +58,7 @@ export async function developWorkflow(actions, budgets) {
             result.screenshots.push(...persisted.screenshots);
           }
         } catch (error) {
-          if (error.code === 'BOOT_BUDGET') throw error;
+          if (['BOOT_BUDGET', 'CLEANUP_FAILED'].includes(error.code)) throw error;
           result = undefined;
           correction = { task: 'Correct runtime verification failures', failures: [error.message.slice(-8000)] };
         }
@@ -68,7 +70,7 @@ export async function developWorkflow(actions, budgets) {
             correction = { task: 'Correct visual findings', findings: visual.findings };
           } else { accepted = true; break; }
         }
-        if (cycle + 1 === budgets.visualReviews) break;
+        if (cycle + 1 === budgets.visualReviews) { state.lastFailure = correction; break; }
         await actions.markCorrection();
         await candidate(correction);
         changes = await actions.classifyCorrection();
@@ -86,8 +88,8 @@ export async function developWorkflow(actions, budgets) {
     state.status = 'failed'; state.error = error.message;
   } finally {
     // Also cleans partially started sessions; adapter stops only processes it owns.
-    try { await actions.stop(); } catch (error) { state.status = 'failed'; state.cleanupError = error.message; }
-    state.sessionStopped = true;
+    try { await actions.stop(); state.sessionStopped = true; }
+    catch (error) { state.status = 'failed'; state.sessionStopped = false; state.cleanupError = error.message; }
     await actions.record(state);
   }
   return state;
@@ -101,7 +103,7 @@ export function dryRunActions(record) {
     record, specification: async () => {}, implement: async () => {}, verify: async () => {},
     review: async () => ++reviews === 1 ? correction : pass,
     build: async () => {}, gameTest: async () => ({ status: 'not-applicable' }),
-    classify: async () => ({ e2e: true }), preflight: async () => {}, start: async () => {}, stop: async () => {},
+    classify: async () => ({ e2e: true }), preflight: async () => 1, start: async () => {}, stop: async () => {},
     e2e: async () => ({ screenshots: [{ file: 'simulated.png' }] }),
     visual: async () => ++visuals === 1 ? correction : pass,
     markCorrection: async () => {}, classifyCorrection: async () => ({ restart: false, reload: ['resources'] }), reload: async () => {}
