@@ -1,6 +1,6 @@
 import { readFile, access } from 'node:fs/promises';
 import path from 'node:path';
-import { walk, gitFiles, save } from './repository.mjs';
+import { walk, gitFiles, save, snapshot } from './repository.mjs';
 import { gradleCommand, requireSuccess } from './process.mjs';
 
 export const requiredFiles = ['AGENTS.md', 'CLAUDE.md', 'README.md', 'spec/README.md', 'spec/PROJECT.md',
@@ -110,7 +110,7 @@ export async function staticValidation(root, runner, { requireReady = false } = 
   return { ok: errors.length === 0, errors, specification: spec?.ready ? 'ready' : 'draft', filesChecked: all.length };
 }
 
-export async function validate(root, runner, artifactDir, { stage = 'compile', requireReady = false } = {}) {
+export async function validate(root, runner, artifactDir, { stage = 'compile', requireReady = false, agentFast = false } = {}) {
   const result = { static: await staticValidation(root, runner, { requireReady }) };
   await save(path.join(artifactDir, 'validation.json'), result);
   if (!result.static.ok) throw new Error(result.static.errors.join('\n'));
@@ -118,17 +118,22 @@ export async function validate(root, runner, artifactDir, { stage = 'compile', r
     const { acceptanceCoverage } = await import('./coverage.mjs');
     await acceptanceCoverage(root, artifactDir);
   }
-  const tests = (await walk(path.join(root, 'harness/test'))).filter(file => file.endsWith('.test.mjs'));
-  result.harness = await runner(process.execPath, ['--test', ...tests.map(file => path.join(root, 'harness/test', file))], { cwd: root });
-  await save(path.join(artifactDir, 'harness-tests.log'), result.harness.stdout + result.harness.stderr);
-  requireSuccess(result.harness, 'Harness tests');
+  if (!agentFast) {
+    const tests = (await walk(path.join(root, 'harness/test'))).filter(file => file.endsWith('.test.mjs'));
+    result.harness = await runner(process.execPath, ['--test', ...tests.map(file => path.join(root, 'harness/test', file))], { cwd: root });
+    await save(path.join(artifactDir, 'harness-tests.log'), result.harness.stdout + result.harness.stderr);
+    requireSuccess(result.harness, 'Harness tests');
+  }
   if (stage !== 'static') {
     const command = gradleCommand(root, stage === 'build' ? ['build'] : ['classes', 'test']);
+    // A sandboxed Codex daemon must not be shared with unsandboxed harness builds.
+    if (agentFast && !command.args.includes('--no-daemon')) command.args.push('--no-daemon');
     result.gradle = await runner(command.command, command.args, { cwd: root, timeoutMs: 900_000 });
     await save(path.join(artifactDir, 'gradle.log'), result.gradle.stdout + result.gradle.stderr);
     requireSuccess(result.gradle, 'Gradle validation');
   }
-  const summary = { ok: true, static: result.static, harness: { ok: true }, gradle: result.gradle ? { ok: true, stage } : { status: 'not-run' } };
+  const summary = { ok: true, static: result.static, harness: agentFast ? { status: 'not-run' } : { ok: true }, gradle: result.gradle ? { ok: true, stage } : { status: 'not-run' } };
+  if (agentFast) summary.validatedFiles = await snapshot(root, runner);
   await save(path.join(artifactDir, 'validation.json'), summary);
   return summary;
 }

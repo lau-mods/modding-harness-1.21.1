@@ -1,9 +1,9 @@
 # Development workflow
 
 1. 具体的な仕様、AC、Non-goalsとVerification割当表を確定する。
-2. Codex Solが [AGENTS.md](../../AGENTS.md) に従って実装、deterministic tests、必要なE2E scenarioを作る。safe build/testは継続して実行できる。
-3. 全required ACの逆方向coverage、test/scenario/screenshot参照、JSON・local resource・spec/Mod ID・documentation linkを検査し、harness tests、Gradle classes/testを実行する。
-4. Claude Opusが隔離snapshotをread-only reviewする。必要なstructured findingsのみCodexへ返し、修正後は3へ戻る。harness保守や未確定のユーザー判断が必要な `protected-input` blockerでは停止する。
+2. Codex Solが [AGENTS.md](../../AGENTS.md) に従って実装、deterministic tests、必要なE2E scenarioを作る。同じ実装セッションで `validate --agent-fast`（static/resource、Gradle classes/test）を実行し、失敗したら修正して再実行する。成功時のfile hashを候補と照合する。
+3. ハーネスがstatic/coverageとharness self-testsを独立に確認する。Codex内で通したGradle classes/testは繰り返さない。
+4. Claude Opusが隔離snapshotをread-only reviewする。修正Codexには理由、finding/error、変更ファイル、関連ACだけを渡し、修正後は2へ戻る。harness保守や未確定のユーザー判断が必要な `protected-input` blockerでは停止する。
 5. pass後にGradle build、適用可能なNeoForge GameTestを実行する。
 6. 変更分類がruntime検証を必要とする場合だけ、専用ローカル環境で全scenarioを1sessionにまとめる。
 7. deterministic preconditionsを通過した必要な画像だけOpusへ渡す。

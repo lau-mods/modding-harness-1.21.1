@@ -1,5 +1,6 @@
-import { readFile, writeFile, mkdir, copyFile, lstat, realpath } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, copyFile, lstat, realpath, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { save, gitFiles, modPaths, snapshot, assertHarnessUnchanged } from './repository.mjs';
 import { subscriptionEnv, requireSuccess } from './process.mjs';
 
@@ -124,19 +125,45 @@ export function codexPermissions() {
     `permissions = { mod-development = { filesystem = { ":root" = "read", ":tmpdir" = "write", ":slash_tmp" = "write", "~/.gradle" = "write", ":workspace_roots" = { ${access} } }, network = { enabled = false } } }`];
 }
 
+export function implementationPrompt(spec, task) {
+  const instructions = `Work in this repository under AGENTS.md. Editable project paths: ${modPaths.join(', ')}. Harness files are read-only; report a blocker if they need changes. Never launch Minecraft or MC Pilot. Do not commit. Preserve user changes. After each edit, run node harness/cli.mjs validate --agent-fast (static/resource checks, Java classes, unit tests). Fix failures and rerun inside this Codex session. Exit successfully only after that command passes for the final files. Do not run GameTest, review, E2E, or harness self-tests.`;
+  if (!task.repair) return `${instructions}\n\nSpecification:\n${spec}\n\nCurrent task:\n${JSON.stringify(task)}`;
+  const ids = [...new Set(JSON.stringify(task).match(/\bAC-[A-Za-z0-9-]+\b/g) ?? [])];
+  const criteria = spec.split('\n').filter(line => ids.some(id => line.startsWith(`- ${id}:`)));
+  return `${instructions}\n\nRepair the current candidate using this evidence. Inspect changed files and only the relevant feature specification if needed.\nReason: ${task.task}\nFindings/errors: ${JSON.stringify(task.findings ?? task.failures ?? [])}\nChanged files: ${JSON.stringify(task.changedFiles ?? [])}\nRelated acceptance criteria: ${criteria.length ? criteria.join('\n') : 'No AC ID identified in the finding; inspect relevant criteria only if needed.'}`;
+}
+
 export async function implement(root, runner, config, dir, task) {
   const spec = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
-  if (spec.length > 30_000) throw new Error('PROJECT.md exceeds 30 KB; split relevant features into spec/features');
-  const prompt = `Implement the current task in this repository. Follow AGENTS.md. Editable project paths: ${modPaths.join(', ')}. All harness files are read-only; stop and report a blocker if they need changes. Never launch Minecraft or MC Pilot; the harness owns lifecycle. Do not commit. Preserve existing user changes. Read only relevant linked feature specs.\n\nSpecification:\n${spec}\n\nCurrent task (structured evidence only):\n${JSON.stringify(task)}`;
+  if (!task.repair && spec.length > 30_000) throw new Error('PROJECT.md exceeds 30 KB; split relevant features into spec/features');
+  const prompt = implementationPrompt(spec, task);
   await save(path.join(dir, 'task.json'), task);
   const before = await snapshot(root, runner);
+  const fastDir = await mkdtemp(path.join(os.tmpdir(), 'mcmod-agent-fast-'));
   const args = ['--no-daemon', 'exec', '--model', config.models.implementer, '--ephemeral',
     '--ignore-user-config', '--ignore-rules', '--strict-config', ...codexPermissions(),
     '-c', 'approval_policy="never"', '--cd', root, '--output-last-message', path.join(dir, 'implementation-summary.txt'), '-'];
   await save(path.join(dir, 'command.json'), { executable: 'codex', args });
   try {
-    const result = await runner('codex', args, { cwd: root, input: prompt, env: subscriptionEnv(), timeoutMs: 1_800_000 });
+    const result = await runner('codex', args, { cwd: root, input: prompt, env: { ...subscriptionEnv(), HARNESS_AGENT_FAST_DIR: fastDir }, timeoutMs: 1_800_000 });
     await save(path.join(dir, 'process.json'), result);
     requireSuccess(result, 'Codex Sol implementation');
-  } finally { await assertHarnessUnchanged(root, runner, before); }
+    let validation;
+    try { validation = JSON.parse(await readFile(path.join(fastDir, 'validation.json'), 'utf8')); }
+    catch { throw new Error('Codex did not complete validate --agent-fast in this session'); }
+    if (validation.ok !== true || validation.static?.ok !== true || validation.gradle?.ok !== true || validation.gradle.stage !== 'compile') {
+      throw new Error('Codex fast validation did not pass; inspect its validation output');
+    }
+    const current = await snapshot(root, runner);
+    if (JSON.stringify(validation.validatedFiles) !== JSON.stringify(current)) throw new Error('Files changed after Codex fast validation; rerun within the implementation session');
+    await save(path.join(dir, 'validation.json'), validation);
+  } finally {
+    try {
+      for (const file of ['validation.json', 'gradle.log', 'failure.json']) {
+        try { await save(path.join(dir, 'agent-fast', file), await readFile(path.join(fastDir, file), 'utf8')); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+      await assertHarnessUnchanged(root, runner, before);
+    } finally { await rm(fastDir, { recursive: true, force: true }); }
+  }
 }

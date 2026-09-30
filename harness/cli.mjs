@@ -15,13 +15,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [command, ...flags] = process.argv.slice(2);
 const playerFlags = flags.filter(flag => flag.startsWith('--players='));
 const playerCount = playerFlags.length ? Number(playerFlags[0].slice('--players='.length)) : 1;
-const allowed = { doctor: [], validate: ['--static', '--build'], 'review-harness': [], develop: ['--dry-run'], 'setup-runtime': ['--accept-eula'] };
-if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].includes(flag) && !(command === 'setup-runtime' && /^--players=[1-9]\d*$/.test(flag))) || playerFlags.length > 1 || !Number.isSafeInteger(playerCount) || (flags.includes('--static') && flags.includes('--build'))) {
-  console.error('Usage: node harness/cli.mjs doctor | validate [--static|--build] | review-harness | develop [--dry-run] | setup-runtime [--accept-eula] [--players=N]');
+const allowed = { doctor: [], validate: ['--static', '--build', '--agent-fast'], 'review-harness': [], develop: ['--dry-run'], 'setup-runtime': ['--accept-eula'] };
+if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].includes(flag) && !(command === 'setup-runtime' && /^--players=[1-9]\d*$/.test(flag))) || playerFlags.length > 1 || !Number.isSafeInteger(playerCount) || (command === 'validate' && flags.length > 1)) {
+  console.error('Usage: node harness/cli.mjs doctor | validate [--static|--build|--agent-fast] | review-harness | develop [--dry-run] | setup-runtime [--accept-eula] [--players=N]');
   process.exitCode = 2;
 } else {
   const id = `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}`;
-  const dir = path.join(root, '.harness-artifacts', command === 'review-harness' ? 'harness-review' : command, id);
+  const dir = command === 'validate' && flags.includes('--agent-fast') && process.env.HARNESS_AGENT_FAST_DIR
+    ? path.resolve(process.env.HARNESS_AGENT_FAST_DIR)
+    : path.join(root, '.harness-artifacts', command === 'review-harness' ? 'harness-review' : command, id);
   await mkdir(dir, { recursive: true });
   let lock;
   const lockPath = path.join(root, '.harness-artifacts/develop.lock');
@@ -35,7 +37,7 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
       for (const check of result.checks) console.log(`${check.ok ? 'OK' : 'MISSING'} ${check.name}: ${check.detail}`);
       process.exitCode = result.ok ? 0 : 1;
     } else if (command === 'validate') {
-      await validate(root, run, dir, { stage: flags.includes('--static') ? 'static' : flags.includes('--build') ? 'build' : 'compile' });
+      await validate(root, run, dir, { stage: flags.includes('--static') ? 'static' : flags.includes('--build') ? 'build' : 'compile', requireReady: flags.includes('--agent-fast'), agentFast: flags.includes('--agent-fast') });
       console.log('Validation passed');
     } else if (command === 'review-harness') {
       const validation = await validate(root, run, path.join(dir, 'verification'), { stage: 'static' });
@@ -74,14 +76,14 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
         },
         async implement(task) {
           candidateDir = path.join(dir, `candidate-${++attempt}`);
-          await implement(root, run, config, candidateDir, task);
+          await implement(root, run, config, candidateDir, task.repair ? { ...task, changedFiles: changed } : task);
           const current = await assertPolicyUnchanged();
           changed = [...new Set([...initialChanges, ...changedSince(initial, current)])];
           await save(path.join(candidateDir, 'changed-files.json'), { files: changed, classification: classify(changed) });
           const diff = requireSuccess(await run('git', ['diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', 'src', 'spec', 'tests', 'build.gradle', 'settings.gradle', 'gradle.properties'], { cwd: root }), 'git diff');
           await writeFile(path.join(candidateDir, 'diff.patch'), diff.stdout);
         },
-        verify: () => validate(root, run, candidateDir, { requireReady: true }),
+        verify: () => validate(root, run, path.join(candidateDir, 'harness-verification'), { stage: 'static', requireReady: true }),
         async review() {
           const diff = await readFile(path.join(candidateDir, 'diff.patch'), 'utf8');
           const currentSpec = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
