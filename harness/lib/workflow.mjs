@@ -32,7 +32,7 @@ export async function developWorkflow(actions, budgets) {
     throw new Error('Code review/fix budget exhausted; inspect the latest findings or test failures');
   }
   async function boot() {
-    if (state.boots >= budgets.gameBoots) throw new Error('Game boot budget exhausted; inspect runtime/visual evidence');
+    if (state.boots >= budgets.gameBoots) throw Object.assign(new Error('Game boot budget exhausted; inspect runtime/visual evidence'), { code: 'BOOT_BUDGET' });
     state.boots++;
     await step('minecraft-start', () => actions.start());
   }
@@ -49,7 +49,15 @@ export async function developWorkflow(actions, budgets) {
         let correction, result;
         try {
           result = await step('e2e-batch', () => actions.e2e(cycle));
+          if (result.requiresRestart) {
+            await step('minecraft-stop', () => actions.stop());
+            await boot();
+            const persisted = await step('e2e-persistence', () => actions.e2ePersistence(cycle));
+            result.screenshots.push(...persisted.screenshots);
+          }
         } catch (error) {
+          if (error.code === 'BOOT_BUDGET') throw error;
+          result = undefined;
           correction = { task: 'Correct runtime verification failures', failures: [error.message.slice(-8000)] };
         }
         if (result) {

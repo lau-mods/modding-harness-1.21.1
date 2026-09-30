@@ -16,6 +16,41 @@ const pass = { verdict: 'pass', findings: [], summary: 'No blocking findings' };
 const finding = { severity: 'major', category: 'correctness', file: 'x.mjs', location: '1', problem: 'A fails', required_change: 'Fix A', reason: 'AC fails' };
 const fail = { verdict: 'changes_required', findings: [finding], summary: 'Correction required' };
 const budgets = { codeReviews: 3, gameBoots: 2, visualReviews: 2 };
+const specification = `Status: ready
+
+## Identity
+Mod ID: test_input
+## Purpose
+Synthetic parser and coverage input; no Mod implementation.
+## Functional requirements
+Test input only.
+## Acceptance criteria
+- AC-A: Synthetic criterion A.
+- AC-B: Synthetic criterion B.
+- AC-C: Synthetic criterion C.
+- AC-D: Synthetic criterion D.
+## Visual requirements
+AC-D: Synthetic visual requirement.
+## Persistence
+Test input only.
+## Multiplayer
+Test input only.
+## Compatibility
+Test input only.
+## Non-goals
+No gameplay implementation.
+## Reference assets
+No references.
+## Unresolved questions
+None.
+## Verification
+| AC | Method | Evidence |
+| --- | --- | --- |
+| AC-A | e2e | case-a |
+| AC-B | persistence | case-b |
+| AC-C | multiplayer | case-c |
+| AC-D | visual | case-a/point |
+`;
 async function temp(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'mcmod-harness-test-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
@@ -70,6 +105,9 @@ test('classification is conservative and combines changes', () => {
   const mixed = classify(['src/main/resources/assets/foo/models/x.json', 'src/main/java/mod/network/Packet.java']);
   assert.equal(mixed.restart, true); assert.equal(mixed.visual, true);
   assert.equal(classify(['src/unknown.cfg']).restart, true);
+  const scenarioOnly = classify(['tests/e2e/scenarios/input.scenario.mjs']);
+  assert.equal(scenarioOnly.e2e, true); assert.equal(scenarioOnly.restart, false); assert.deepEqual(scenarioOnly.reload, []);
+  assert.equal(classify(['tests/qualification/input.java']).e2e, false);
 });
 
 test('hash differences include modifications, additions and deletions', () => {
@@ -95,14 +133,13 @@ test('review args provide no execution/edit/MCP tools', () => {
   assert.ok(!args.includes('--dangerously-skip-permissions'));
 });
 
-test('visual evidence includes accepted AC wording and referenced assets', async () => {
-  const source = (await readFile(path.join(root, 'spec/PROJECT.template.md'), 'utf8'))
-    .replace('現在なし。参考画像を追加する場合は', '[color](references/copper.png) を使用。参考画像を追加する場合は');
-  const spec = visualSpecification(source, ['AC-VISUAL']);
-  assert.match(spec.requirements, /銅/);
-  assert.match(spec.acceptanceCriteria.find(item => item.id === 'AC-VISUAL').requirement, /白い目盛り/);
-  assert.deepEqual(spec.referenceFiles, ['spec/references/copper.png']);
-  assert.throws(() => visualSpecification(source.replace('references/copper.png', '../private.png'), ['AC-VISUAL']), /inside spec\/references/);
+test('visual evidence includes accepted AC wording and referenced assets', () => {
+  const source = specification.replace('No references.', '[reference](references/input.png)');
+  const spec = visualSpecification(source, ['AC-D']);
+  assert.equal(spec.requirements, 'AC-D: Synthetic visual requirement.');
+  assert.deepEqual(spec.acceptanceCriteria, [{ id: 'AC-D', requirement: 'Synthetic criterion D.' }]);
+  assert.deepEqual(spec.referenceFiles, ['spec/references/input.png']);
+  assert.throws(() => visualSpecification(source.replace('references/input.png', '../private.png'), ['AC-D']), /inside spec\/references/);
 });
 
 test('schema keys match parser contract', async () => {
@@ -112,12 +149,13 @@ test('schema keys match parser contract', async () => {
   assert.equal(schema.additionalProperties, false);
 });
 
-test('placeholder is rejected but template-based completed specification is accepted', async () => {
-  assert.throws(() => parseSpec('Status: draft\nTEMPLATE_NOT_CONFIGURED'), /not ready/);
-  const example = (await readFile(path.join(root, 'spec/PROJECT.template.md'), 'utf8')).replace('Status: draft', 'Status: ready');
-  assert.equal(parseSpec(example).modId, 'copper_counter');
-  assert.throws(() => parseSpec(example.replace('## Non-goals', '## Missing')), /Non-goals/);
-  assert.throws(() => parseSpec(example + '\nTODO'), /placeholder/);
+test('template placeholders are rejected and independent complete input is accepted', async () => {
+  const text = await readFile(path.join(root, 'spec/PROJECT.template.md'), 'utf8');
+  assert.throws(() => parseSpec(text), /not ready/);
+  assert.throws(() => parseSpec(text.replace('Status: draft', 'Status: ready')), /placeholder/);
+  assert.equal(parseSpec(specification).modId, 'test_input');
+  assert.throws(() => parseSpec(specification.replace('## Non-goals', '## Missing')), /Non-goals/);
+  assert.throws(() => parseSpec(specification + '\nTODO'), /placeholder/);
 });
 
 test('no GameTest skips without calling Gradle; annotations and generators run it', async t => {
@@ -270,8 +308,9 @@ test('real MC Pilot adapter batches mocked CLI actions and preserves worlds on c
   const clientDir = path.join(dir, '.harness-artifacts/mct-home/clients/mcmod-fixture/minecraft');
   const serverDir = path.join(dir, '.harness-artifacts/server');
   const files = {
-    'gradle.properties': 'neo_version=21.1.252\n', 'harness/log-allowlist.json': '[]',
-    'node_modules/@kzheart_/mc-pilot/bin/mct': '', 'build/libs/test.jar': 'fixture',
+    'gradle.properties': 'neo_version=21.1.252\nmod_id=test_input\nmod_version=2\n', 'harness/log-allowlist.json': '[]',
+    'node_modules/@kzheart_/mc-pilot/bin/mct': '', 'build/libs/test_input-2.jar': 'current build',
+    'build/libs/test_input-1.jar': 'old version', 'build/libs/old_id-2.jar': 'old identity',
     '.harness-artifacts/e2e-runtime.json': JSON.stringify({ client: 'mcmod-fixture', address: '127.0.0.1:25579' }),
     '.harness-artifacts/server/eula.txt': 'eula=true\n',
     '.harness-artifacts/server/server.properties': 'server-ip=127.0.0.1\nserver-port=25579\nonline-mode=false\nlevel-name=world\n',
@@ -287,18 +326,18 @@ test('real MC Pilot adapter batches mocked CLI actions and preserves worlds on c
       await writeFile(path.join(serverDir, 'logs/latest.log'), 'INFO Started\n');
       options.onOutput('Done (1.0s)!');
       await new Promise(resolve => options.signal.addEventListener('abort', resolve, { once: true }));
-      return { ok: true, stdout: 'stopped', stderr: '' };
+      return { ok: true, code: 0, signal: null, stdout: 'stopped', stderr: '' };
     }
     const cli = args.slice(1); let data;
     if (cli[0] === 'client' && cli[1] === 'list') data = { clients: [{ name: 'mcmod-fixture', loader: 'neoforge', mcVersion: '1.21.1', wsPort: 25580, running, launchArgs: ['--version-id', 'neoforge-21.1.252', '--game-dir', clientDir] }] };
-    else if (cli[0] === 'client' && cli[1] === 'launch') { running = true; launches++; await writeFile(path.join(dir, '.harness-artifacts/mct-home/logs/client-mcmod-fixture.log'), 'INFO joined\n'); data = {}; }
+    else if (cli[0] === 'client' && cli[1] === 'launch') { assert.equal(cli[cli.indexOf('--ws-port') + 1], '25580'); running = true; launches++; await writeFile(path.join(dir, '.harness-artifacts/mct-home/logs/client-mcmod-fixture.log'), 'INFO joined\n'); data = {}; }
     else if (cli[0] === 'client' && cli[1] === 'wait-ready') data = { connected: true, inWorld: true };
     else if (cli[0] === 'client' && cli[1] === 'stop') { running = false; data = { stopped: true }; }
     else data = { success: true, data: { x: 0.5 } };
     return { ok: true, stdout: JSON.stringify({ success: true, data }), stderr: '' };
   };
   const checkedPorts = [];
-  const session = await createSession(dir, runner, path.join(dir, 'evidence'), { checkPort: async port => checkedPorts.push(port) });
+  const session = await createSession(dir, runner, path.join(dir, 'evidence'), { checkPort: async port => { checkedPorts.push(port); return port || 25580; } });
   try {
     await session.start();
     const scenario = { id: 'fixture', visual: false, setup: async () => {}, actions: async () => {}, assertions: async ({ mct }) => assert.equal((await mct(['position', 'get'])).x, 0.5), cleanup: async () => { cleaned++; } };
@@ -310,7 +349,11 @@ test('real MC Pilot adapter batches mocked CLI actions and preserves worlds on c
     assert.throws(() => session.query(['status', 'all', '--client=other']), /test target/);
   } finally { await session.stop(); }
   assert.equal(running, false);
-  assert.deepEqual(checkedPorts, [25579, 25580]);
+  assert.deepEqual(checkedPorts, [25579, 0]);
+  for (const base of [serverDir, clientDir]) assert.equal(await readFile(path.join(base, 'mods/harness-under-test.jar'), 'utf8'), 'current build');
+  await writeFile(path.join(dir, 'gradle.properties'), 'neo_version=21.1.252\nmod_id=test_input\nmod_version=3\n');
+  await assert.rejects(() => session.start(), /test_input-3\.jar/);
+  assert.equal(launches, 1);
   assert.equal(await readFile(path.join(serverDir, 'world/keep.txt'), 'utf8'), 'world data');
 });
 
@@ -324,4 +367,51 @@ test('log windows ignore old errors; suppression is exact and preserves other fa
   const neo = '[30Sep2026 11:21:38.209] [Server thread/ERROR] [example.Logger/]: known fixture message';
   assert.equal(relevantLogs(neo, [{ message: '[Server thread/ERROR] [example.Logger/]: known fixture message', reason: 'fixture' }]), '');
   assert.match(relevantLogs(neo.replace('fixture message', 'different failure'), [{ message: '[Server thread/ERROR] [example.Logger/]: known fixture message', reason: 'fixture' }]), /different failure/);
+});
+
+test('AC coverage rejects an uncovered required criterion before any process starts', async t => {
+  const { acceptanceCoverage } = await import('../lib/coverage.mjs');
+  const dir = await temp(t);
+  await mkdir(path.join(dir, 'spec'), { recursive: true });
+  await writeFile(path.join(dir, 'spec/PROJECT.md'), specification.replace(/^\| AC-B .*\n/m, ''));
+  await assert.rejects(() => acceptanceCoverage(dir, path.join(dir, 'evidence')), /AC-B: no verification assigned/);
+  const report = JSON.parse(await readFile(path.join(dir, 'evidence/acceptance-coverage.json')));
+  assert.equal(report.executed, false); assert.equal(report.status, 'failed');
+});
+
+test('AC coverage validates reverse scenario/visual/persistence mappings', async t => {
+  const { acceptanceCoverage } = await import('../lib/coverage.mjs');
+  const dir = await temp(t);
+  await mkdir(path.join(dir, 'spec'), { recursive: true });
+  await mkdir(path.join(dir, 'tests/e2e/scenarios'), { recursive: true });
+  await writeFile(path.join(dir, 'spec/PROJECT.md'), specification);
+  for (const [id, ac, phase, visual] of [['case-a', ['AC-A', 'AC-D'], 'candidate', true], ['case-b', ['AC-B'], 'after-restart', false], ['case-c', ['AC-C'], 'candidate', false]]) {
+    await writeFile(path.join(dir, `tests/e2e/scenarios/${id}.scenario.mjs`), `export default {id:${JSON.stringify(id)},acceptanceCriteria:${JSON.stringify(ac)},phase:${JSON.stringify(phase)},visual:${visual},verification:['multiplayer'],setup:async()=>{},actions:async()=>{},assertions:async()=>{},cleanup:async()=>{},screenshots:${visual ? "[{id:'point',criteria:['Synthetic visual requirement.'],prepare:async()=>{},assertState:async()=>{}}]" : '[]'}}`);
+  }
+  assert.equal((await acceptanceCoverage(dir, path.join(dir, 'evidence'))).percent, 100);
+  await writeFile(path.join(dir, 'spec/PROJECT.md'), specification.replace('case-a/point', 'case-a/missing'));
+  await assert.rejects(() => acceptanceCoverage(dir, path.join(dir, 'evidence')), /visual evidence/);
+});
+
+test('persistence spends a second boot and cannot bypass the game budget', async () => {
+  const actions = dryRunActions(async () => {});
+  actions.review = async () => pass; actions.visual = async () => pass;
+  actions.e2e = async () => ({ screenshots: [], requiresRestart: true });
+  let persistence = 0;
+  actions.e2ePersistence = async () => { persistence++; return { screenshots: [] }; };
+  const result = await developWorkflow(actions, budgets);
+  assert.equal(result.status, 'pass'); assert.equal(result.boots, 2); assert.equal(persistence, 1);
+  const limited = await developWorkflow(actions, { ...budgets, gameBoots: 1 });
+  assert.equal(limited.status, 'failed'); assert.equal(limited.boots, 1); assert.equal(persistence, 1);
+  assert.equal(limited.codeAttempts, 1); assert.match(limited.error, /Game boot budget exhausted/);
+});
+
+test('a scenario-only candidate executes runtime evidence instead of a zero-boot pass', async () => {
+  const actions = dryRunActions(async () => {});
+  actions.review = async () => pass;
+  actions.classify = async () => classify(['tests/e2e/scenarios/new-acceptance.scenario.mjs']);
+  let batches = 0;
+  actions.e2e = async () => { batches++; return { screenshots: [] }; };
+  const result = await developWorkflow(actions, budgets);
+  assert.equal(result.status, 'pass'); assert.equal(result.boots, 1); assert.equal(batches, 1);
 });

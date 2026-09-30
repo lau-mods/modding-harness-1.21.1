@@ -90,7 +90,7 @@ export async function staticValidation(root, runner, { requireReady = false } = 
     if (/\.json(?:\.mcmeta)?$|\.mcmeta$/.test(file)) {
       try {
         const json = JSON.parse(await readFile(path.join(root, file), 'utf8'));
-        for (const [kind, ref, ext] of resourceReferences(file, json)) {
+        for (const [kind, ref, ext] of /^src\/(main|generated)\/resources\//.test(file) ? resourceReferences(file, json) : []) {
           const [namespace, name] = ref.includes(':') ? ref.split(':') : ['minecraft', ref];
           if (namespace === 'minecraft' || !namespaces.has(namespace)) continue;
           if (!resources.has(`${namespace}/${kind}/${name}${ext}`)) errors.push(`${file}: missing local ${kind} reference ${ref}`);
@@ -114,6 +114,10 @@ export async function validate(root, runner, artifactDir, { stage = 'compile', r
   const result = { static: await staticValidation(root, runner, { requireReady }) };
   await save(path.join(artifactDir, 'validation.json'), result);
   if (!result.static.ok) throw new Error(result.static.errors.join('\n'));
+  if (result.static.specification === 'ready') {
+    const { acceptanceCoverage } = await import('./coverage.mjs');
+    await acceptanceCoverage(root, artifactDir);
+  }
   const tests = (await walk(path.join(root, 'harness/test'))).filter(file => file.endsWith('.test.mjs'));
   result.harness = await runner(process.execPath, ['--test', ...tests.map(file => path.join(root, 'harness/test', file))], { cwd: root });
   await save(path.join(artifactDir, 'harness-tests.log'), result.harness.stdout + result.harness.stderr);

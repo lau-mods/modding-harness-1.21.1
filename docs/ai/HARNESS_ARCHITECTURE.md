@@ -22,3 +22,7 @@ artifactは `.harness-artifacts/<command>/<run-id>/`。開始hash、既存変更
 MC Pilot 0.16.0のschema/info/searchでcommandを検証した。CLIは別processとして呼び、内部moduleはimportしない。client instanceの標準game directory配置と公開listのlaunchArgsをadapterの一点で検査する。MC PilotはNeoForge serverを作成できないため、事前導入したNeoForge serverをJava argfileでharnessが起動する。どちらも専用artifact directory内に限定する。[E2E setup](../../tests/e2e/README.md)参照。
 
 `develop --dry-run` は副作用をmockにした同じengineでcode指摘→修正→再レビュー→build→GameTest skip→1bootでbatch→visual指摘→修正→resource reload→再レビューまで進む。これは実agent/runtime試験とは区別して `simulated: true` を保存する。
+
+`lib/coverage.mjs` はMarkdown Verification表とtest/scenarioの参照を逆引きし、起動前に全required ACへの割当を確認する。検証用Modの専用runnerは本体の外に置き、共通moduleを呼ぶ。本体は検証用Modをimportせず、Mod固有のID・AC・resource path・例外commandを持たない。共通self-testも特定Modや仕様記入例に依存させない。新しいagent frameworkやDSLは追加しない。
+
+`setup-runtime` は公式installerでexact NeoForge21.1.252を導入し、MC Pilot固有のinstance metadata更新をadapter内で完結する。EULAは明示flagまたは専用eula.txtによる本人同意のみ。setup/developは共通lockを使用する。同じruntimeを使う検証用projectのrunnerもこのlockを取得する。runtime準備、GameTest、client bootsを別々に記録し、prepare/mockの結果を実機passに昇格しない。

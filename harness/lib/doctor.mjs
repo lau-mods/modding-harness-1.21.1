@@ -3,13 +3,13 @@ import path from 'node:path';
 import { requiredFiles } from './validate.mjs';
 import { subscriptionEnv, gradleCommand } from './process.mjs';
 import { claudeAuth } from './agents.mjs';
-import { discover } from './mc-pilot.mjs';
+import { discover, runtimeVersions } from './mc-pilot.mjs';
 
 export async function doctor(root, runner) {
   const checks = [];
   const add = (name, ok, detail) => checks.push({ name, ok, detail });
   add('Node.js >= 20', Number(process.versions.node.split('.')[0]) >= 20, process.version);
-  const java = await runner('java', ['-version'], { cwd: root });
+  const java = await runner(process.env.HARNESS_JAVA || 'java', ['-version'], { cwd: root });
   add('Java 21', java.ok && /version "21\./.test(java.stdout + java.stderr), (java.stderr || java.stdout).split('\n')[0]);
   const git = await runner('git', ['rev-parse', '--show-toplevel'], { cwd: root });
   add('Git repository', git.ok && path.resolve(git.stdout.trim()) === path.resolve(root), git.ok ? git.stdout.trim() : git.failure);
@@ -36,9 +36,13 @@ export async function doctor(root, runner) {
     add('MC Pilot CLI / NeoForge 1.21.1', true, `loader ${loader.loaderVersion}; server install is external (no NeoForge server create)`);
     const props = await readFile(path.join(root, 'gradle.properties'), 'utf8');
     const neo = props.match(/^neo_version=(.+)$/m)[1].trim();
-    add('MC Pilot stock loader matches MDK', loader.loaderVersion === neo, `stock=${loader.loaderVersion}, MDK=${neo}; provision matching dedicated runtime for E2E`);
+    add('MC Pilot stock loader / exact target', true, `stock=${loader.loaderVersion}, MDK=${neo}; setup-runtime installs the exact target without booting stock`);
   } catch (error) { add('MC Pilot', false, error.message); }
-  try { await access(path.join(root, '.harness-artifacts/e2e-runtime.json')); add('E2E runtime configuration', true, 'Present; full runtime preflight runs before boot'); }
-  catch { add('E2E runtime configuration', false, 'Not prepared; follow tests/e2e/README.md'); }
+  try {
+    await access(path.join(root, '.harness-artifacts/e2e-runtime.json'));
+    const versions = await runtimeVersions(root);
+    const eula = await readFile(path.join(root, '.harness-artifacts/server/eula.txt'), 'utf8');
+    add('E2E runtime configuration', /^eula=true\s*$/m.test(eula), `${versions.minecraft} / ${versions.neoForge}; EULA must be accepted; full preflight runs before boot`);
+  } catch (error) { add('E2E runtime configuration', false, `Run setup-runtime: ${error.message}`); }
   return { ok: checks.every(check => check.ok), checks };
 }

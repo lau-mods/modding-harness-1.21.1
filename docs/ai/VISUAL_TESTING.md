@@ -6,7 +6,7 @@ visual criteriaがあるscenarioだけ画像を撮る。MC Pilot query/Node asse
 
 | 項目 | 値 |
 | --- | --- |
-| window | 1280×720、fullscreen=false |
+| window | 854×480、fullscreen=false |
 | GUI scale | 2 |
 | FOV | 70 |
 | language | en_us（翻訳ACだけja_jp等） |
@@ -24,3 +24,5 @@ resource reloadは専用loose packへassetsを同期しF3+T、dataは専用datap
 各scenario開始時にserver/client logのbyte offsetを記録する。MC Pilotにはserver logs-markがあるが、NeoForge serverを管理対象にできないためこのadapterはbyte offsetを使う。新しいwindowだけ走査しerror/exception/fatal/resource load失敗を抽出する。allowlistは [log-allowlist.json](../../harness/log-allowlist.json) のexact messageと理由のみ。広いregexでwarning/errorを隠さない。
 
 Opusは必要な画像とACだけを見る。missing texture/model、magenta/black、UV、z-fighting、transparency、GUI clipping/overlap、text overflow、slot位置、item/block向き、placeholderをfeature固有基準に照らして検査する。visualが不要な仕様に装飾的なscreenshot reviewを追加しない。
+
+MC Pilot0.16のmanaged launcherは854×480のwindowを使います。GUI scale2、OSのDPIによるframebuffer sizeは各PNGとMC Pilot queryに記録します。window sizeとframebuffer sizeは同一とは限りません。clientのWebSocket portはpublic `client launch --ws-port` により毎session空きportを選び、macOSの即時再bind失敗を避けます。

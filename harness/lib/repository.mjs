@@ -51,7 +51,8 @@ export async function workingChanges(root, runner) {
 
 const rules = [
   [/^(docs|spec)\/|\.md$|^TEMPLATE_LICENSE/, 'documentation', {}],
-  [/^harness\/|^tests\/e2e\/|^package(?:-lock)?\.json$|^\.github\//, 'harness', {}],
+  [/^tests\/e2e\//, 'e2e-scenario', { e2e: true }],
+  [/^harness\/|^tests\/qualification\/|^package(?:-lock)?\.json$|^\.github\//, 'harness', {}],
   [/(?:registry|network|packet).*\.java$|^(?:gradle\/|libs\/)|\.gradle(?:\.kts)?$|^gradle\.properties$|\.toml$|mixins.*\.json$/i, 'registry-network-metadata', { gameTest: true, e2e: true, restart: true }],
   [/\/(?:client|screen|renderer)\/|(?:Client|Screen|Renderer)\w*\.java$/, 'client-java', { e2e: true, restart: true, visual: true }],
   [/\/assets\/[^/]+\/(?:textures|models|blockstates|lang)\//, 'visual-resource', { e2e: true, visual: true, reload: 'resources' }],

@@ -11,3 +11,5 @@
 - method/class lengthにhard thresholdを置かない。metricを満たすための分割をしない。
 
 reviewでは変更file数やdiff行数をscopeの手掛かりとしてよいが、合否の数値基準にはしない。Non-goalsに触れる追加機能はscope違反。minorを消すためだけの抽象化も避ける。
+
+ハーネス本体に特定Modの仕様・registry ID・生成ファイル名・期待値を埋め込まない。これらはprojectの仕様・source・scenarioに属する。検証用Modの専用処理は本体へimportせず、検証用project側から共通moduleを呼ぶ。共通self-testは独立した最小の合成入力で契約を検証する。

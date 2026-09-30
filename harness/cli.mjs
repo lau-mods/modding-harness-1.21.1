@@ -7,14 +7,15 @@ import { loadConfig, save, snapshot, workingChanges, changedSince, classify } fr
 import { validate, parseSpec, gameTest } from './lib/validate.mjs';
 import { doctor } from './lib/doctor.mjs';
 import { review, implement } from './lib/agents.mjs';
-import { createSession, loadScenarios } from './lib/mc-pilot.mjs';
+import { createSession, loadScenarios, setupRuntime } from './lib/mc-pilot.mjs';
+import { acceptanceCoverage, coverageRows } from './lib/coverage.mjs';
 import { developWorkflow, dryRunActions } from './lib/workflow.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [command, ...flags] = process.argv.slice(2);
-const allowed = { doctor: [], validate: ['--static', '--build'], 'review-harness': [], develop: ['--dry-run'] };
+const allowed = { doctor: [], validate: ['--static', '--build'], 'review-harness': [], develop: ['--dry-run'], 'setup-runtime': ['--accept-eula'] };
 if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].includes(flag)) || (flags.includes('--static') && flags.includes('--build'))) {
-  console.error('Usage: node harness/cli.mjs doctor | validate [--static|--build] | review-harness | develop [--dry-run]');
+  console.error('Usage: node harness/cli.mjs doctor | validate [--static|--build] | review-harness | develop [--dry-run] | setup-runtime [--accept-eula]');
   process.exitCode = 2;
 } else {
   const id = `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}`;
@@ -24,7 +25,10 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
   const lockPath = path.join(root, '.harness-artifacts/develop.lock');
   try {
     const config = await loadConfig(root);
-    if (command === 'doctor') {
+    if (command === 'setup-runtime') {
+      lock = await open(lockPath, 'wx'); await lock.writeFile(JSON.stringify({ pid: process.pid, dir }));
+      console.log(await setupRuntime(root, run, dir, { acceptEula: flags.includes('--accept-eula') }));
+    } else if (command === 'doctor') {
       const result = await doctor(root, run); await save(path.join(dir, 'doctor.json'), result);
       for (const check of result.checks) console.log(`${check.ok ? 'OK' : 'MISSING'} ${check.name}: ${check.detail}`);
       process.exitCode = result.ok ? 0 : 1;
@@ -52,14 +56,18 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
       let spec, attempt = 0, candidateDir, changed = [], correctionBase, session, scenarios;
       const assertPolicyUnchanged = async () => {
         const current = await snapshot(root, run);
-        const protectedChanges = changedSince(initial, current).filter(file => /^(?:harness\/|AGENTS\.md$|CLAUDE\.md$|docs\/ai\/|spec\/PROJECT\.md$)/.test(file));
+        const protectedChanges = changedSince(initial, current).filter(file => /^(?:harness\/|AGENTS\.md$|CLAUDE\.md$|\.gitignore$|docs\/ai\/|spec\/PROJECT\.md$)/.test(file));
         if (protectedChanges.length) throw new Error(`Implementation changed protected harness/spec policy: ${protectedChanges.join(', ')}`);
         return current;
       };
       const actions = {
         record: state => save(path.join(dir, 'summary.json'), state),
         async specification() {
-          spec = parseSpec(await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8'));
+          const text = await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8');
+          spec = parseSpec(text);
+          const rows = coverageRows(text);
+          const missing = spec.criteria.filter(id => !rows.some(row => row.ac === id));
+          if (missing.length) throw new Error(`Specification needs Verification assignments for ${missing.join(', ')}; see spec/README.md`);
           const environment = await doctor(root, run);
           await save(path.join(dir, 'doctor.json'), environment);
           const mandatory = environment.checks.filter(check => !/MC Pilot|E2E runtime/.test(check.name));
@@ -95,13 +103,17 @@ if (!Object.hasOwn(allowed, command) || flags.some(flag => !allowed[command].inc
         },
         classify: async () => classify(changed),
         async preflight() {
-          scenarios = await loadScenarios(root, spec.criteria);
+          scenarios = (await acceptanceCoverage(root, candidateDir)).scenarios;
           if (!scenarios.length) throw new Error('Runtime changes require acceptance-linked *.scenario.mjs coverage');
           if (classify(changed).visual && !scenarios.some(scenario => scenario.visual)) throw new Error('Visual changes require a scenario with visual criteria and screenshots');
           session = await createSession(root, run, path.join(dir, 'runtime'));
         },
         start: () => session.start(), stop: async () => { if (session) await session.stop(); },
-        e2e: cycle => session.batch(scenarios, cycle),
+        async e2e(cycle) {
+          const result = await session.batch(scenarios.filter(s => s.phase !== 'after-restart'), cycle);
+          return { ...result, requiresRestart: scenarios.some(s => s.phase === 'after-restart') };
+        },
+        e2ePersistence: cycle => session.batch(scenarios.filter(s => s.phase === 'after-restart'), `${cycle}-persisted`),
         visual: result => review(root, run, config, path.join(candidateDir, 'visual-review'), 'visual', { screenshots: result.screenshots }),
         async markCorrection() { correctionBase = await snapshot(root, run); },
         async classifyCorrection() {

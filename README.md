@@ -4,7 +4,7 @@ Minecraft Java Edition **1.21.1 / NeoForge / ModDevGradle / Java 21**の開発�
 
 ## Prerequisites
 
-- 64-bit JDK 21、Git、Node.js >=20（MC Pilotのdependencyも考慮してNode22 LTS以降を推奨）、npm。
+- 64-bit JDK 21、Git、Node.js 22 LTS（harness自体は>=20。MC PilotのNode26互換問題はE2E手順参照）、npm。
 - ChatGPT subscriptionで認証したCodex CLI。
 - Claude Pro等のsubscriptionで認証したnative Claude Code。Opusと現在のheadless/structured/safe-mode flagsを使えること。
 - E2Eにはdesktop/OpenGL、MC Pilotと同じNeoForge versionの専用client/server、Minecraft EULAへの同意が必要です。
@@ -30,7 +30,7 @@ MC Pilotは唯一のNode devDependencyで0.16.0に固定しています。`--ign
 
 ## Write specifications and develop
 
-[spec/README](spec/README.md)と[記入例](spec/PROJECT.template.md)に沿って [spec/PROJECT.md](spec/PROJECT.md) を編集します。目的、機能、AC、visual、保存、multiplayer、compatibility、**Non-goals**、参考資料を具体化し、`Status: ready` にします。未記入では実developは拒否します。
+[spec/README](spec/README.md)と[記入欄](spec/PROJECT.template.md)に沿って [spec/PROJECT.md](spec/PROJECT.md) を編集します。目的、機能、AC、visual、保存、multiplayer、compatibility、**Non-goals**、参考資料を具体化し、`Status: ready` にします。未記入では実developは拒否します。
 
 ```text
 node harness/cli.mjs develop
@@ -49,6 +49,7 @@ CodexはspecのMod IDに合わせMDK sampleを更新し、機能と必要なtest
 | `review-harness` | static検証後、実Claude Opusによる独立read-only review |
 | `develop --dry-run` | 同じ状態遷移engineのmock実行。外部AI・Gradle・Minecraft起動なし |
 | `develop` | spec→実装→静的検証→compile/test→review/fix→build→GameTest→必要なE2E→visual |
+| `setup-runtime [--accept-eula]` | exact NeoForge client/server準備。ゲームは起動せず、EULAは本人の明示操作のみ |
 | `npm test` | Node built-in runnerによるharness self-tests |
 
 表のcommandは `node harness/cli.mjs <command>` で実行します。GameTestがないfresh templateではnot-applicableにします。低コスト検証を先に完了し、完成候補だけをMinecraftへ持ち込みます。defaultはcode candidate/review3回、client boot2回、runtime/visual batch2回。resource-only修正は安全なloose pack reload、Java/registry/networking変更はrestartします。
@@ -74,3 +75,7 @@ baseline SHA・remote・初期status・versions・構造は [upstream-baseline.j
 標準 `client`、`server`、`gameTestServer`、`data` は保持しています。通常の `gradlew runData`、`runClient`、`runServer` は人間が必要時に使えます。build JARは `build/libs/`。IDEの依存解決問題は `gradlew --refresh-dependencies` を検討し、`clean` は生成build出力だけを再生成します。
 
 Mojang mappingの利用条件は [NeoFormのlicense reference](https://github.com/NeoForged/NeoForm/blob/main/Mojang.md)を確認してください。MDK template licenseはTEMPLATE_LICENSE.txt、Modの配布licenseは自分の仕様で選択します。[NeoForge公式docs](https://docs.neoforged.net/docs/1.21.1/gettingstarted/)と[NeoForged Discord](https://discord.neoforged.net/)も利用できます。
+
+## Harness and project boundary
+
+ハーネスはユーザー仕様とscenarioを入力として、検証・review・Minecraft lifecycleを管理します。Mod固有のID、生成ファイル名、操作、期待値はprojectの仕様・source・resource・scenarioだけに置きます。検証用Modの専用runnerとテストもハーネス本体から分離し、それらがなくても共通self-testとdry-runを実行できます。実機qualificationの手順と結果は検証用projectとそのartifactsで管理します。
