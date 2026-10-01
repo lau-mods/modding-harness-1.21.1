@@ -38,14 +38,11 @@ Node dependenciesはharness内の `package.json` / lockfileで管理し、system
 既存systemのrootで実行します。source tree、履歴、tag、release、Gradle、spec、AGENTSをtemplate版に置き換える必要はありません。
 
 ```sh
-git submodule add <harness-repository-url> .harness
-# 利用するreleaseを選び、detached HEADで固定
-git -C .harness checkout --detach <version-tag-or-commit>
+git submodule add git@github.com:lau-mods/modding-harness-1.21.1.git .harness
 npm --prefix .harness ci --ignore-scripts
 node .harness/cli.mjs doctor
 node .harness/cli.mjs validate --build
 git add .gitmodules .harness
-# 内容を確認してsystem側でcommit
 ```
 
 `doctor` は不足を具体的に報告します。project contractは `AGENTS.md`、`spec/PROJECT.md`、`build.gradle`、`settings.gradle`、`gradle.properties`、Gradle wrapper一式です。Gradle metadataには `minecraft_version=1.21.1`、`neo_version`、`mod_id`、`mod_version` が必要です。標準source/resource配置は `src/main/`、生成resourcesは `src/generated/resources/`、scenarioは `tests/e2e/scenarios/`。E2E配備JARは `build/libs/<mod_id>-<mod_version>.jar` を使用します。
@@ -57,16 +54,16 @@ git add .gitmodules .harness
 ## 新規systemの作成
 
 ```sh
-git clone <harness-repository-url> modding-harness-1.21.1
+git clone git@github.com:lau-mods/modding-harness-1.21.1.git modding-harness-1.21.1
 cd modding-harness-1.21.1
-git checkout --detach <release-tag>
-node cli.mjs create ../new-system
-cd ../new-system
+node cli.mjs create ../<new-system>
+cd ../<new-system>
+rm -rf .git
+git init
 npm --prefix .harness ci --ignore-scripts
 node .harness/cli.mjs doctor
 node .harness/cli.mjs validate --build
 git add .
-git commit -m "chore: initialize system with modding harness"
 ```
 
 `create` はGitとNode標準libraryだけで動作します。空directory（`.git` のみ存在する独立repositoryも可）をtargetにします。非空projectは拒否し、既存導入手順へ案内します。
@@ -143,6 +140,26 @@ system rootから `node .harness/cli.mjs <command>` で実行します。別cwd�
 既存command/optionの能力とgate順序は保持しています。entry pointは従来の `harness/cli.mjs` からrootの `cli.mjs` へ移動しました。通常runtime self-testsはtemplateを必要としないテストだけを実行し、bootstrap専用テストは `npm test` で実行します。
 
 新規specは `Status: draft` のため実 `develop` を拒否します。仕様とAC/Non-goals/Verification割当を合意してからreadyにします。初回project commitも先に作成してください。
+
+## Checkpoint development
+
+長大taskは `spec/tasks/<task-id>.md` にGoal、Included Acceptance Criteria、Constraints、Non-goalsを書き、readyなPROJECT仕様とともに先にcommitしてください。cleanなprojectから開始します。
+
+```sh
+node .harness/cli.mjs develop --task spec/tasks/TASK-001.md --plan-only
+node .harness/cli.mjs develop --resume
+# 計画から実行まで一括、または指定checkpointで停止
+node .harness/cli.mjs develop --task spec/tasks/TASK-002.md --stop-after M03
+# 保存状態を検証して再開 / 未完了milestonesのみ再計画
+node .harness/cli.mjs develop --resume
+node .harness/cli.mjs develop --resume --replan --plan-only
+# 外部AI・Gradle・Minecraft・commitなし
+node .harness/cli.mjs develop --task spec/tasks/TASK-003.md --dry-run
+```
+
+Planはschema/AC coverage検証とOpus reviewを通します。各vertical sliceを既存pipelineで実装・検証し、source/tests/config/JAR fingerprintが一致した場合だけ **Harnessがlocal commit** します。agentはGit historyやspecを変更できません。**pushする操作は実装しません**。最後に全体regressionを行い、失敗しても完了checkpointを保持します。既存のtask指定なし `develop` は自動commitしません。
+
+state/Plan/各gateの証跡は `.harness-artifacts/checkpoints/<run-id>/`。resumeはHEAD、commit chain、spec/task/Plan hash、harness revision、worktree/indexを照合し、不一致なら停止します。[taskの書き方、長大task例、検証選択、resume/replan、失敗復旧](docs/ai/CHECKPOINT_WORKFLOW.md)を参照してください。
 
 ## Configuration, policies and artifacts
 

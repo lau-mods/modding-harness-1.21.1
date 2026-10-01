@@ -6,6 +6,10 @@ Node >=20のES modulesと標準libraryを使う。外部dependencyはMC Pilotだ
 | --- | --- |
 | cli.mjs | command dispatch、実processへの接続、run artifacts、develop lock |
 | lib/workflow.mjs | boundedな状態遷移。real/dry-run/testで同じengine |
+| lib/develop.mjs | 既存candidate pipelineの実tool接続。通常developとmilestone/final regressionで共有 |
+| lib/checkpoints.mjs | Work Plan、milestone順次実行、resume/replan、atomic state、最終regression |
+| lib/work-plan.mjs | task入力、schema相当の厳密検証、AC割当、milestone context |
+| lib/checkpoint-git.mjs | source/JAR/index fingerprint、stage/commit境界、commit chain検証。remote操作なし |
 | lib/process.mjs | shellなしsubprocess、timeout/output制限、終了処理、OS別Gradle wrapper |
 | lib/repository.mjs | config、git/file hash、artifact、単純な変更分類表 |
 | lib/validate.mjs | spec、resource/JSON、self-test、Gradle、GameTest |
@@ -19,7 +23,7 @@ Codexのnamed filesystem profileはrepositoryをread-onlyとし、[repository.mj
 
 hash照合はGitが列挙するfileとsubmoduleのindex pointer・HEAD・内部worktreeが対象であり、gitignoreされたruntimeやdependencyは含まない。sandboxはCodexの実行に適用し、後続のGradle/test/scenario codeを隔離するものではないため、それらもreview対象とする。
 
-artifactは `.harness-artifacts/<command>/<run-id>/`。開始hash、既存変更一覧、candidate差分、validation summary、Gradle log、structured review、runtime log抜粋、E2E結果、必要画像、最終summaryを置く。自動commitはしない。raw authentication resultは保存せず、API key系環境変数をagent子processから除外する。artifactも外部共有前に確認する。
+artifactは `.harness-artifacts/<command>/<run-id>/`。開始hash、既存変更一覧、candidate差分、validation summary、Gradle log、structured review、runtime log抜粋、E2E結果、必要画像、最終summaryを置く。通常developはcommitしない。明示的なcheckpoint taskでは [checkpoint workflow](CHECKPOINT_WORKFLOW.md) のgate後にHarnessだけがlocal commitする。raw authentication resultは保存せず、API key系環境変数をagent子processから除外する。artifactも外部共有前に確認する。
 
 レビューsource snapshotは上限800 KB。上限超過時はscopeを絞り、巨大dumpを黙って送らない。spec prompt上限30,000文字、diff上限60,000文字で切り詰めを明示し、untracked filesもmanifestに列挙する。snapshot sourceは変更せずコピーし、process/log出力だけをredactする。画像reviewには承認済みvisual要件・関連ACの本文とリンクされたspec/referencesの資料、必要な画像のみを渡し、sourceは含めない。LLM間で会話履歴やgenerated outputを送り直さない。deterministic resultをAIの主観で上書きしない。
 

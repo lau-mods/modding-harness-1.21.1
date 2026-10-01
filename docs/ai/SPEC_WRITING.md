@@ -2,6 +2,8 @@
 
 project の `spec/PROJECT.md` を入力とする。新規projectには `spec/README.md` と `spec/PROJECT.template.md` の記入欄が付属するが、既存projectへの導入には不要。section名はvalidatorが認識するため保ち、本文は自由な自然言語で書ける。独自DSLは不要。
 
+恒久仕様と今回の開発範囲を分ける場合は `spec/tasks/<task-id>.md` を使う。[task形式とcheckpoint workflow](CHECKPOINT_WORKFLOW.md)を参照。`spec/**` はユーザーが確定・変更する入力であり、implementation agentには編集させない。
+
 目的には「誰が何をできるようになるか」を書く。identityにはMod ID・表示名・対象version・言語・ライセンスを記載する。機能は正常系に加え、空、満杯、権限不足、同時操作、再起動など必要な境界を観測可能な結果で説明する。Javaのclass名やpatternを先に指定しない。
 
 ACには一意な `- AC-<ID>: ...` を付ける。「便利」「綺麗」「正しく保存」だけでは検証できない。「初期状態／操作／観測できる結果」の形で記述する。どの層で検証するかは実装担当が判断し、レビュー担当が根拠を確認する。

@@ -4,6 +4,8 @@ Target Minecraft Java 1.21.1, NeoForge, ModDevGradle, Java 21. Preserve the MDK'
 
 Codex Sol implements. Claude Opus independently reviews code and visual evidence, read-only. Exchange structured findings/test results, never conversation transcripts.
 
+`spec/**` is user-owned input and read-only during implementation. Implement only the current milestone's goal and ACs; honor excludedScope and do not prebuild later milestones. Never run git commit, push, reset, rebase, checkout, stash or merge, or change Git metadata/index. The harness alone creates verified local commits when the user invokes checkpoint development. See [checkpoint workflow](CHECKPOINT_WORKFLOW.md).
+
 Read only the policy relevant to the task:
 
 - Code/design: [CODE_QUALITY](CODE_QUALITY.md).

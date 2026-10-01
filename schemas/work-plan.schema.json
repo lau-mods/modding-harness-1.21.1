@@ -1,0 +1,160 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "taskId",
+    "baseCommit",
+    "specHash",
+    "taskHash",
+    "milestones"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "taskId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "baseCommit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "specHash": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "taskHash": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "milestones": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "goal",
+          "acceptanceCriteria",
+          "dependsOn",
+          "excludedScope",
+          "verification",
+          "commitMessage"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^M[0-9]{2,3}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "goal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "maxItems": 200,
+            "minItems": 1
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "maxItems": 200
+          },
+          "excludedScope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "maxItems": 200,
+            "minItems": 1
+          },
+          "verification": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "unit",
+              "gameTest",
+              "e2e",
+              "visual",
+              "fullRegression"
+            ],
+            "properties": {
+              "unit": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "maxItems": 200
+              },
+              "gameTest": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "maxItems": 200
+              },
+              "e2e": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "maxItems": 200
+              },
+              "visual": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "maxItems": 200
+              },
+              "fullRegression": {
+                "type": "boolean"
+              }
+            }
+          },
+          "commitMessage": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[^\\r\\n]+$"
+          }
+        }
+      }
+    }
+  }
+}

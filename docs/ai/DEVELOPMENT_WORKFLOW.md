@@ -1,11 +1,13 @@
 # Development workflow
 
+この単一候補pipelineは従来の `develop` と [checkpoint orchestration](CHECKPOINT_WORKFLOW.md) が共有する。`develop --task` はschema/AC検証・Opus reviewを通したPlanの各milestoneを順番に渡し、完了candidateだけをHarnessがcommitする。taskなしのdevelopはcommitしない。specは全経路でread-only。
+
 1. 具体的な仕様、AC、Non-goalsとVerification割当表を確定する。
 2. Codex Solが project root の `AGENTS.md` と [共通policy](AGENT_POLICY.md) に従って実装、deterministic tests、必要なE2E scenarioを作る。同じ実装セッションで `validate --agent-fast`（static/resource、Gradle classes/test）を実行し、失敗したら修正して再実行する。成功時のfile hashを候補と照合する。
-3. ハーネスがstatic/coverageとharness self-testsを独立に確認する。Codex内で通したGradle classes/testは繰り返さない。
+3. ハーネスがstatic/coverage参照形式とharness self-testsを独立に確認する。この段階でscenario moduleを実行しない。Codex内で通したGradle classes/testは繰り返さない。
 4. Claude Opusが隔離snapshotをread-only reviewする。修正Codexには理由、finding/error、変更ファイル、関連ACだけを渡し、修正後は2へ戻る。harness保守や未確定のユーザー判断が必要な `protected-input` blockerでは停止する。
 5. pass後にGradle build、適用可能なNeoForge GameTestを実行する。
-6. 変更分類がruntime検証を必要とする場合だけ、専用ローカル環境で全scenarioを1sessionにまとめる。
+6. review済みscenarioをloadして厳密なcoverageを確認し、仕様requiredと変更分類の和集合に従ってruntime検証する。checkpointでは対象AC・smoke・影響するregressionを選び、最後は全scenarioを検証する。
 7. deterministic preconditionsを通過した必要な画像だけOpusへ渡す。
 8. runtime/visual修正も静的検証・code review・build・GameTestを通す。resourceだけなら有効化済みloose packを更新してreloadする。Java/registry/network/metadata変更は再起動する。
 
@@ -13,7 +15,7 @@ defaultはcode candidate/review最大3回、client boot最大3回、runtime/visu
 
 1clientの場合、最初のbootは完成候補、2回目はruntime/visual不具合の確認に使う。scenarioごとに再起動しない。no-GameTestはnot-applicableでありMod失敗ではない。build/GameTest失敗も同じ有限candidate予算の中で修正し、再検証・再レビューする。外部review CLI自体の失敗をModのvisual defectと誤認して修正しない。
 
-developは開始時のhashと既存差分を保存する。既存ユーザー差分もreview/classificationへ含める。commit・reset・stashはしない。reviewer会話を再利用せず、毎回独立したCLI runを使用する。クラッシュ後の再実行は新しいrunとなり、古いworld/artifactを削除しない。
+taskなしdevelopは開始時のhashと既存差分を保存し、既存ユーザー差分もreview/classificationへ含める。commit・reset・stashはしない。checkpointはcleanなprojectから開始し、保存状態を検証してresumeする。reviewer会話は再利用せず、毎回独立したCLI runを使用する。古いworld/artifactは削除しない。
 
 
 保存のACはafter-restart scenarioで確認し、通常batch→保存終了→2回目のsession→既存stateの検証→visual reviewとなる。1clientでもdefault予算のうち2bootを保存検証で使うため、修正後の再検証に2bootが必要なら予算超過としてevidenceを返す。保存ACがあるprojectでは、resource/scenarioの修正でも保存再起動の再検証に追加bootが必要になる。保存ACがないprojectのresource/scenario修正では稼働sessionを再利用できる。qualificationの失敗後に人間/実装担当が修正して明示的に再実行した場合は新runとして記録し、前runの失敗や実起動回数を隠さない。

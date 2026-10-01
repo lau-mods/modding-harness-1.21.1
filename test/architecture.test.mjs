@@ -135,6 +135,8 @@ test('doctor reads project contract while runtime resources and MC Pilot stay in
 test('code review loads common docs, schema and prompts from harness, source from project', async t => {
   const dir = await temporary(t); await projectFixture(dir);
   await mkdir(path.join(dir, 'src')); await writeFile(path.join(dir, 'src/Project.java'), 'project source');
+  requireSuccess(await run('git', ['add', '.'], { cwd: dir }), 'stage fixture');
+  requireSuccess(await run('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture'], { cwd: dir }), 'commit fixture');
   const runner = async (command, args, options) => {
     if (command === 'git') return run(command, args, options);
     if (args[0] === 'auth') return { ok: true, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }) };
