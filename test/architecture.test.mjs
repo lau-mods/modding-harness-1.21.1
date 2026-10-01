@@ -38,6 +38,10 @@ test('existing project contract is independent of harness configuration and temp
 test('submodule-shaped CLI uses invocation project and explicit --project without template', async t => {
   const dir = await temporary(t), system = path.join(dir, 'system'), runtime = path.join(system, '.harness');
   await projectFixture(system);
+  await writeFile(path.join(system, 'spec/PROJECT.md'), '# Project\nMod ID: test_input\n## Requirements\nA synthetic behavior is observable in the game.\n');
+  await writeFile(path.join(system, '.gitignore'), '.harness-artifacts/\n.harness/\nconfig.json\n');
+  requireSuccess(await run('git', ['add', '.'], { cwd: system }), 'fixture stage');
+  requireSuccess(await run('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture baseline'], { cwd: system }), 'fixture commit');
   await mkdir(runtime);
   for (const name of ['cli.mjs', 'lib', 'config.json', 'prompts', 'schemas', 'docs', 'log-allowlist.json']) {
     await cp(path.join(harnessRoot, name), path.join(runtime, name), { recursive: true });
@@ -46,7 +50,7 @@ test('submodule-shaped CLI uses invocation project and explicit --project withou
   for (const [cwd, args] of [[system, []], [dir, ['--project', system]]]) {
     const result = await run(process.execPath, [path.join(runtime, 'cli.mjs'), 'develop', '--dry-run', ...args], { cwd });
     requireSuccess(result, 'CLI dry-run');
-    assert.match(result.stdout, /"status": "pass"/);
+    assert.match(result.stdout, /"status": "complete"/);
     assert.match(result.stdout, /"simulated": true/);
   }
   for (const [initial, args] of [[system, []], [dir, ['--project', system]]]) {
@@ -54,7 +58,7 @@ test('submodule-shaped CLI uses invocation project and explicit --project withou
       cwd: runtime, env: { ...process.env, INIT_CWD: initial }
     }), 'npm invocation context');
   }
-  await access(path.join(system, '.harness-artifacts/develop'));
+  await access(path.join(system, '.harness-artifacts/checkpoints'));
   await assert.rejects(access(path.join(runtime, '.harness-artifacts')));
   for (const args of [['setup-runtime', '--players=2', '--players=3'], ['validate', '--build', '--build']]) {
     const invalid = await run(process.execPath, [path.join(runtime, 'cli.mjs'), ...args], { cwd: system });
@@ -135,13 +139,15 @@ test('doctor reads project contract while runtime resources and MC Pilot stay in
 test('code review loads common docs, schema and prompts from harness, source from project', async t => {
   const dir = await temporary(t); await projectFixture(dir);
   await mkdir(path.join(dir, 'src')); await writeFile(path.join(dir, 'src/Project.java'), 'project source');
+  requireSuccess(await run('git', ['add', '.'], { cwd: dir }), 'stage fixture');
+  requireSuccess(await run('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture'], { cwd: dir }), 'commit fixture');
   const runner = async (command, args, options) => {
     if (command === 'git') return run(command, args, options);
     if (args[0] === 'auth') return { ok: true, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }) };
     if (args[0] === '--help') return { ok: true, stdout: '--permission-prompts --json-schema --safe-mode --restricted --tools --strict-mcp-config --no-session-persistence' };
     assert.equal(await readFile(path.join(options.cwd, 'src/Project.java'), 'utf8'), 'project source');
     assert.equal(await readFile(path.join(options.cwd, 'docs/ai/CODE_QUALITY.md'), 'utf8'), await readFile(path.join(harnessRoot, 'docs/ai/CODE_QUALITY.md'), 'utf8'));
-    assert.match(options.input, /acceptance criteria/);
+    assert.match(options.input, /observable acceptance criteria/);
     return { ok: true, stdout: JSON.stringify({ subtype: 'success', structured_output: { verdict: 'pass', findings: [], summary: 'Synthetic review result' } }) };
   };
   assert.equal((await review(dir, runner, await loadConfig({}), path.join(dir, '.harness-artifacts/review'), 'code')).verdict, 'pass');

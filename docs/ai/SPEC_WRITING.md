@@ -1,30 +1,45 @@
-# 仕様の書き方
+# PROJECT.mdの書き方
 
-project の `spec/PROJECT.md` を入力とする。新規projectには `spec/README.md` と `spec/PROJECT.template.md` の記入欄が付属するが、既存projectへの導入には不要。section名はvalidatorが認識するため保ち、本文は自由な自然言語で書ける。独自DSLは不要。
+開発者が維持する仕様入力はproject側の `spec/PROJECT.md` だけです。TASK、feature、reference、AC対応表、milestone、実装・review用briefはHarnessとAIが派生します。生成物の内容がPROJECT.mdと矛盾した場合はPROJECT.mdが優先されます。
 
-目的には「誰が何をできるようになるか」を書く。identityにはMod ID・表示名・対象version・言語・ライセンスを記載する。機能は正常系に加え、空、満杯、権限不足、同時操作、再起動など必要な境界を観測可能な結果で説明する。Javaのclass名やpatternを先に指定しない。
+`# Project`、`Mod ID: ...`、目的、機能または要件をMarkdownで記述します。新規templateのdraftとTEMPLATE_NOT_CONFIGUREDを消して、準備ができたら `Status: ready` にします。AC IDや専用DSLは不要です。英語のsection名は例であり、内容は自然な日本語で書けます。
 
-ACには一意な `- AC-<ID>: ...` を付ける。「便利」「綺麗」「正しく保存」だけでは検証できない。「初期状態／操作／観測できる結果」の形で記述する。どの層で検証するかは実装担当が判断し、レビュー担当が根拠を確認する。
+```markdown
+# Project
 
-visual requirementsには対象AC、色・形・pixel style・サイズ・GUI配置、必要な視点を書く。GUIがないならそう明記する。参照画像は出典と利用条件、真似する特徴と真似しない特徴を添える。画像の全pixel一致を要求する場合はrenderer/font/OS差も仕様として扱う。
+Status: ready
 
-persistenceは保存単位、寿命、破壊時、再起動時、既存world migrationを説明する。multiplayerはserver authoritativeな結果、同時操作、同期、権限、client/server双方への導入要否を定める。compatibilityは対象loader/versionと特別に必要な他Mod/resource packを列挙し、対象外も明記する。
+Mod ID: examplemod
 
-**Non-goalsを空にしない。** 「自動化しない」「GUIなし」「他loader対応なし」「設定screenなし」など、隣接するが今回実装しない機能を挙げる。AIは未指定の便利機能やgeneral frameworkを発明しない。
+## Purpose
+プレイヤーが金属を手動で板材へ加工できる。
 
-unresolved questionsは、本当に判断不能でobservable behaviorに影響する事項だけを書く。実装手段の通常判断はagentに任せる。未解決の製品判断が残るなら `Status: draft` を維持する。readyへの変更は仕様の合意を表し、agentは勝手に変更しない。
+## Features
 
-## AC verification assignments
+### 銅のプレス機
+銅インゴット1個を入れて操作すると銅板が1個できる。
+材料がない場合は加工されず、材料も減らない。
 
-すべての `- AC-ID: ...` をrequiredとして扱い、`## Verification` に3列のMarkdown tableを置きます。1 ACへ複数行を割り当てられます。記入時は適切な方法を決め、実装時にCodexが参照先のtest/scenarioを作成します。未割当・未知AC・存在しない参照はMinecraft起動前に失敗します。割当済みは実行成功とは区別します。
+## Visual Requirements
+設置したプレス機の圧盤が上面に見える。
 
-| AC | Method | Evidence |
-| --- | --- | --- |
-| `AC-<ID>` | gametest | `<GameTest source path>` |
-| `AC-<ID>` | e2e | `<scenario ID>` |
-| `AC-<ID>` | persistence | `<after-restart scenario ID>` |
-| `AC-<ID>` | visual | `<scenario ID>/<screenshot ID>` |
+## Persistence Requirements
+加工中の状態はserver再起動後も保持する。
 
-Methodは `unit`（src/testの@Test source）、`static`（src/main/generated resource）、`gametest`（登録された@GameTest source）、`e2e`（scenario id）、`visual`（scenario id/screenshot id）、`multiplayer`（multiplayerを明示するscenario）、`persistence`（after-restart scenario）です。仕様の性質に合う方法を選び、画像ACをunitだけで済ませたり、保存ACをcodec testだけで済ませたりしないでください。適切さは独立code reviewでも確認します。specには行動と期待結果を書き、実装のclass分割を指示しません。
+## Multiplayer Requirements
+serverが結果を確定し、すべてのplayerに同じ状態を示す。
 
-表は構文の説明であり、予約されたACや生成ファイルはない。Mod ID・registry ID・resource path・class名・scenario内容はproject側の仕様・実装・テストに置く。ハーネスは割当表とscenarioを読み、特定Modに対応する分岐や定数を持たない。
+## Constraints
+Minecraft Java 1.21.1 / NeoForge / Java 21。
+
+## Non-goals
+hopperによる自動化は行わない。
+```
+
+「初期状態、操作、観測できる結果」を具体的に書いてください。数、例外、満杯・空、保存、複数playerの同時操作、画像の視点と配置、互換性などは必要な場合に記述します。Java class、package構成、test file名、milestone境界は指定しなくて構いません。
+
+AIはPROJECT.mdを先に分析し、機能、要件、AC、検証方法、依存、作業単位を生成します。各派生項目はPROJECT.mdの原文引用とハッシュに結び付き、Opusが意味の一致を独立に確認します。IDはHarness内で生成し、変更時に同じ要件のIDを可能な限り維持します。削除IDは退役させ、他の要件へ再利用しません。
+
+実装方法の小さな曖昧さはagentが判断します。製品挙動を左右する重要な曖昧さは `NEEDS_PROJECT_CLARIFICATION` として箇所、理由、選択肢を報告します。開発者はPROJECT.mdを編集して答えます。TASKファイルへ答えを書く必要はありません。
+
+PROJECT.mdを変えると古いモデルと未完了計画は実行できません。新しいrunでは前の派生モデルと比較し、追加・変更・削除を反映して残りの作業を計画します。完了済みcommitは書き換えません。引用元と検証割当は `.harness-artifacts/checkpoints/<run-id>/project-model.json` で確認できます。これらを削除してもPROJECT.mdとsourceから再生成できますが、過去のID対応を残すにはartifactの保持が有益です。

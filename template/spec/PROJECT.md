@@ -1,8 +1,21 @@
-# Project specification
+# Project
 
 Status: draft
 
+Mod ID: examplemod
+
 TEMPLATE_NOT_CONFIGURED
 
-このファイルを [PROJECT.template.md](PROJECT.template.md) に沿って具体化してください。
-受け入れ条件とNon-goalsを確定して `Status: ready` にするまで、実際のdevelopは拒否します。
+## Purpose
+
+このModを使う人と、実現したい体験を書いてください。
+
+## Features
+
+### 最初の機能
+
+操作したときにゲーム内で何が起き、どの結果を観測できるかを書いてください。
+
+## Non-goals
+
+今回作らない近接機能を書いてください。

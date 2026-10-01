@@ -83,7 +83,8 @@ test('Mod edits preserve existing harness changes and protect all non-project fi
   await rm(path.join(dir, '.harness/config.json'));
   await assert.rejects(() => assertHarnessUnchanged(dir, runner, initial), /\.harness\/config.json/);
   for (const file of ['.harness/new.mjs', 'package.json', 'tests/e2e/README.md', 'AGENTS.md']) assert.equal(isModPath(file), false);
-  for (const file of ['spec/PROJECT.md', 'spec/features/input.md', 'spec/PROJECT.template.md', 'spec/README.md', 'src/main/new.java', 'tests/e2e/scenarios/new.scenario.mjs', 'build.gradle']) assert.equal(isModPath(file), true);
+  for (const file of ['spec/PROJECT.md', 'spec/features/input.md', 'spec/tasks/task.md']) assert.equal(isModPath(file), false);
+  for (const file of ['src/main/new.java', 'tests/e2e/scenarios/new.scenario.mjs', 'build.gradle']) assert.equal(isModPath(file), true);
 });
 
 test('Codex uses a restrictive filesystem profile and checks integrity even on CLI failure', async t => {
@@ -98,7 +99,7 @@ test('Codex uses a restrictive filesystem profile and checks integrity even on C
     assert.ok(!args.includes('--sandbox')); assert.ok(args.includes('approval_policy="never"'));
     const profile = codexPermissions().at(-1);
     assert.match(profile, /"\." = "read"/); assert.match(profile, /"src" = "write"/);
-    assert.match(profile, /"spec" = "write"/);
+    assert.doesNotMatch(profile, /"spec" = "write"/);
     assert.doesNotMatch(profile, /"harness" = "write"/);
     await writeFile(path.join(dir, 'AGENTS.md'), 'changed by a faulty runner');
     return { ok: false, code: 1, stdout: '', stderr: 'CLI failed' };
@@ -107,7 +108,7 @@ test('Codex uses a restrictive filesystem profile and checks integrity even on C
   assert.equal(await readFile(path.join(dir, 'AGENTS.md'), 'utf8'), 'changed by a faulty runner');
 });
 
-test('an implementation can align PROJECT.md with user instructions while preserving the harness', async t => {
+test('implementation agents cannot change the accepted PROJECT specification', async t => {
   const dir = await temp(t);
   await mkdir(path.join(dir, 'spec'));
   await writeFile(path.join(dir, 'spec/PROJECT.md'), specification);
@@ -121,7 +122,7 @@ test('an implementation can align PROJECT.md with user instructions while preser
     await writeFile(path.join(options.env.HARNESS_AGENT_FAST_DIR, 'validation.json'), JSON.stringify({ ok: true, static: { ok: true }, gradle: { ok: true, stage: 'compile' }, validatedFiles: await snapshot(dir, runner) }));
     return { ok: true, code: 0, stdout: '', stderr: '' };
   };
-  await implement(dir, runner, { models: { implementer: 'gpt-6-sol' } }, path.join(dir, 'artifacts'), task);
+  await assert.rejects(implement(dir, runner, { models: { implementer: 'gpt-6-sol' } }, path.join(dir, 'artifacts'), task), /protected files: spec\/PROJECT.md/);
   assert.equal(await readFile(path.join(dir, 'spec/PROJECT.md'), 'utf8'), specification.replaceAll('AC-A', 'AC-INPUT'));
   assert.equal(await readFile(path.join(dir, 'AGENTS.md'), 'utf8'), 'existing user policy');
 });

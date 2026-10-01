@@ -1,6 +1,6 @@
 # MC Pilot E2E
 
-各 project の `tests/e2e/scenarios/*.scenario.mjs` は普通のNode moduleで、default exportに `id`、`acceptanceCriteria`（PROJECTのAC ID）、`visual`、`setup`、`actions`、`assertions`、`screenshots`、`cleanup` を持ちます。project の `tests/e2e/scenarios/smoke.example.mjs`は有効scenarioではありません。コピーして実際のACと挙動に書き換えてください。独自DSLやscenarioごとのbootは使いません。
+各 project の `tests/e2e/scenarios/*.scenario.mjs` は普通のNode moduleで、default exportに `id`、`acceptanceCriteria`（派生モデルのAC ID）、`visual`、`setup`、`actions`、`assertions`、`screenshots`、`cleanup` を持ちます。project の `tests/e2e/scenarios/smoke.example.mjs`は有効scenarioではありません。実装agentが生成されたACと挙動に合わせてscenarioを作ります。独自DSLやscenarioごとのbootは使いません。
 
 `{mct}` を受け取る関数はCLI引数の配列を渡し、返されたdataをNode assertで検査します。state条件待機を使い、固定sleepを重ねないでください。screenshotsの各pointには `id`、`criteria`、`prepare`、`assertState` が必要です。setupが途中で失敗してもcleanupを実行します。通常cleanupは作ったtest block/item/GUI状態だけを戻し、worldを消しません。
 
@@ -26,7 +26,7 @@ MC Pilot0.16.0のv0.9.1 client mod URLは現在404のため、公式v0.14.0の1.
 
 専用clientの `config/fml.toml` はsetup時とsession起動前に `earlyWindowControl = false` を設定します。FML 4.0.44はGLFW初期化に成功しても1秒を超えるとERRORを出すため、[公式の回避方法](https://neoforged.net/meta/displayerrors/)で早期スプラッシュ表示を無効化します。既存の他の設定は保持します。早期表示のGL機能に依存するModの検証には、この設定の再検討が必要です。
 
-`## Verification` のAC割当は起動前に逆方向も検証します。`phase: 'after-restart'` のscenarioは通常batchを保存終了した後、次のsessionで実行します。persistence検証ではsetupで対象を再作成しないでください。
+派生モデルのAC検証割当は起動前に逆方向も検証します。`phase: 'after-restart'` のscenarioは通常batchを保存終了した後、次のsessionで実行します。persistence検証ではsetupで対象を再作成しないでください。
 
 ## Multiplayer
 
