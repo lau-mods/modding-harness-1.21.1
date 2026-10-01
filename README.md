@@ -1,8 +1,8 @@
-# Modding harness — Minecraft 1.21.1
+# Modding Harness — Minecraft 1.21.1
 
 Minecraft Java **1.21.1 / NeoForge / ModDevGradle / Java 21** 用の共通開発基盤です。Codex Solで実装し、Claude Opusで独立review、Gradle/GameTest/MC Pilotで段階的に検証します。新規作成も既存projectへの導入も、同じ **project-owned files + `.harness` Git submodule** になります。
 
-## Architecture and ownership
+## 構造と所有者
 
 ```text
 modding-harness-1.21.1/       system-repository/
@@ -21,13 +21,14 @@ modding-harness-1.21.1/       system-repository/
 | --- | --- | --- |
 | runtime-owned | CLI、lib、self-tests、npm dependencies、config、prompts/schema、共通docs/agent policy、review・validation・Minecraft lifecycle | `.harness` のcommit pointerを明示更新 |
 | template-owned | `template/` 内のGradle、MDK sample source/resources、draft spec、scenario例、AGENTS/README、ignore/attributes、CI、MDK license | harness側で将来の新規作成用に変更 |
-| project-owned | materialize済みの上記ファイル、既存systemのsource/spec/Gradle/AGENTS、独自設定・resources | system側で独立して変更 |
+| project-owned | materialize済みsource/Gradle/AGENTSと唯一の開発者所有仕様 `spec/PROJECT.md` | system側で独立して変更 |
+| AI/Harness管理 | `.harness-artifacts/checkpoints/<run>/project-model.json`、機能・要件・AC・TASK・Work Plan | PROJECT.mdから生成し、通常のsource commitへ含めない |
 
 `template/` は **createでだけ使用** します。生成後の同期・上書きは行いません。通常のdoctor/validate/develop/reviewには不要です。runtimeは生成経路を記録・分岐しません。harness rootは自身のmodule URL（`lib/paths.mjs`）から、project rootはCLI実行時のcwd、または `--project PATH` から決めます。project rootで実行してください。subdirectoryからの暗黙的な親探索はありません。
 
 Node dependenciesはharness内の `package.json` / lockfileで管理し、system rootにnpm packageを追加しません。
 
-## Prerequisites
+## 前提環境
 
 - Git、64-bit JDK 21、Node.js 22 LTS、npm。harnessのengine範囲は>=20 <26。
 - `develop`: ChatGPT subscriptionで認証したCodex CLIと、claude.ai subscriptionで認証したnative Claude Code（Opus）。API keyは使用しません。
@@ -58,12 +59,11 @@ git clone git@github.com:lau-mods/modding-harness-1.21.1.git modding-harness-1.2
 cd modding-harness-1.21.1
 node cli.mjs create ../<new-system>
 cd ../<new-system>
-rm -rf .git
-git init
 npm --prefix .harness ci --ignore-scripts
 node .harness/cli.mjs doctor
 node .harness/cli.mjs validate --build
 git add .
+git commit -m "chore: initialize project"
 ```
 
 `create` はGitとNode標準libraryだけで動作します。空directory（`.git` のみ存在する独立repositoryも可）をtargetにします。非空projectは拒否し、既存導入手順へ案内します。
@@ -117,7 +117,7 @@ git commit -m "chore: update modding harness"
 
 更新単位はsystem側のsubmodule pointerです。systemごとに異なるversionを使えます。自動化も同じpointer更新で行えます。Gradle、source、spec、AGENTSを同期する処理はありません。
 
-## CLI compatibility
+## CLIと互換性
 
 system rootから `node .harness/cli.mjs <command>` で実行します。別cwdからは例として `node /path/to/.harness/cli.mjs validate --build --project /path/to/system` を使えます。
 
@@ -130,8 +130,8 @@ system rootから `node .harness/cli.mjs <command>` で実行します。別cwd�
 | `validate` | 上記 + Gradle task contract、classes/test |
 | `validate --agent-fast` | static/resource + task contract、classes/test。self-testsは別ゲート |
 | `validate --build` | static/self-tests + task contract、build |
-| `develop --dry-run` | 同じ状態遷移engineのmock実行。AI/Gradle/Minecraftなし |
-| `develop` | spec→実装/compile→review/fix→build→GameTest→batched E2E→visual |
+| `develop --dry-run` | PROJECT.mdから模擬計画を作る。同じ状態遷移engineをAI/Gradle/Minecraftなしで実行 |
+| `develop` | PROJECT.md→仕様コンパイル→計画review→検証済みmilestone commit→全体regression |
 | `setup-runtime [--accept-eula] [--players=N]` | 専用runtime準備。EULA同意は本人の明示操作のみ |
 | `review-harness` | harness自身のstatic/self-testsとOpus独立review。project rootとは無関係 |
 | `create TARGET [--harness-ref TAG_OR_SHA] [--harness-url URL]` | 新規systemのbootstrap |
@@ -139,27 +139,28 @@ system rootから `node .harness/cli.mjs <command>` で実行します。別cwd�
 
 既存command/optionの能力とgate順序は保持しています。entry pointは従来の `harness/cli.mjs` からrootの `cli.mjs` へ移動しました。通常runtime self-testsはtemplateを必要としないテストだけを実行し、bootstrap専用テストは `npm test` で実行します。
 
-新規specは `Status: draft` のため実 `develop` を拒否します。仕様とAC/Non-goals/Verification割当を合意してからreadyにします。初回project commitも先に作成してください。
+新規specは `Status: draft` のため実 `develop` を拒否します。PROJECT.mdにMod ID、目的、観測できる要件、必要な制約・非対象範囲を書いてreadyにしてください。AC ID、TASKファイル、検証表、milestoneファイルは不要です。template作成直後は初回project commitを作成してください。その後のPROJECT.mdの変更は、他の未commit変更がなければ最初の検証済みmilestone commitに含められます。
 
-## Checkpoint development
+## PROJECT.mdからの開発
 
-長大taskは `spec/tasks/<task-id>.md` にGoal、Included Acceptance Criteria、Constraints、Non-goalsを書き、readyなPROJECT仕様とともに先にcommitしてください。cleanなprojectから開始します。
+通常の開発者の操作は次の通りです。PROJECT.mdからAIが機能、要件、AC、検証、作業、milestoneを生成します。Codexが1件ずつ実装し、Claude Opusが独立してreviewします。
 
 ```sh
-node .harness/cli.mjs develop --task spec/tasks/TASK-001.md --plan-only
+node .harness/cli.mjs develop --plan-only
 node .harness/cli.mjs develop --resume
-# 計画から実行まで一括、または指定checkpointで停止
-node .harness/cli.mjs develop --task spec/tasks/TASK-002.md --stop-after M03
-# 保存状態を検証して再開 / 未完了milestonesのみ再計画
+# 計画から最終regressionまで一括
+node .harness/cli.mjs develop
+# 指定checkpointで停止、または仕様変更後に再計画
+node .harness/cli.mjs develop --stop-after M03
 node .harness/cli.mjs develop --resume
 node .harness/cli.mjs develop --resume --replan --plan-only
 # 外部AI・Gradle・Minecraft・commitなし
-node .harness/cli.mjs develop --task spec/tasks/TASK-003.md --dry-run
+node .harness/cli.mjs develop --dry-run
 ```
 
-Planはschema/AC coverage検証とOpus reviewを通します。各vertical sliceを既存pipelineで実装・検証し、source/tests/config/JAR fingerprintが一致した場合だけ **Harnessがlocal commit** します。agentはGit historyやspecを変更できません。**pushする操作は実装しません**。最後に全体regressionを行い、失敗しても完了checkpointを保持します。既存のtask指定なし `develop` は自動commitしません。
+派生モデルとPlanはハッシュ、引用元、ID、AC割当、依存、検証を決定的に確認し、OpusがPROJECT.mdとの意味の一致をreviewします。各縦の機能単位を既存pipelineで検証し、source/tests/config/JARの指紋が一致した場合だけ **Harnessがローカルcommit** します。agentはGit historyやPROJECT.mdを変更できません。push操作はありません。全milestone後にPROJECT.md全体のregressionを行い、失敗しても完了checkpointを保持します。
 
-state/Plan/各gateの証跡は `.harness-artifacts/checkpoints/<run-id>/`。resumeはHEAD、commit chain、spec/task/Plan hash、harness revision、worktree/indexを照合し、不一致なら停止します。[taskの書き方、長大task例、検証選択、resume/replan、失敗復旧](docs/ai/CHECKPOINT_WORKFLOW.md)を参照してください。
+model/state/Plan/各gateの証跡は `.harness-artifacts/checkpoints/<run-id>/`。resumeはHEAD、commit chain、PROJECT/model/Plan hash、Harness revision、worktree/indexを照合します。PROJECT.md変更時は古い計画を実行せず、残りを再計画します。ID対応を長期に維持したい場合は過去のartifactを保存してください。[仕様の書き方](docs/ai/SPEC_WRITING.md)と[checkpoint手順](docs/ai/CHECKPOINT_WORKFLOW.md)を参照してください。
 
 ## Configuration, policies and artifacts
 

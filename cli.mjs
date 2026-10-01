@@ -13,6 +13,7 @@ import { setupRuntime } from './lib/mc-pilot.mjs';
 import { developWorkflow, dryRunActions } from './lib/workflow.mjs';
 import { runDevelopment } from './lib/develop.mjs';
 import { checkpointDevelopment, resumeDirectory } from './lib/checkpoints.mjs';
+import { readProjectModel, projectHash } from './lib/project-model.mjs';
 
 let command, flags, root, options, target, argumentError;
 try {
@@ -20,12 +21,12 @@ try {
     project: { type: 'string' }, 'harness-ref': { type: 'string' }, 'harness-url': { type: 'string' },
     static: { type: 'boolean' }, build: { type: 'boolean' }, 'agent-fast': { type: 'boolean' },
     'dry-run': { type: 'boolean' }, 'accept-eula': { type: 'boolean' }, players: { type: 'string' },
-    task: { type: 'string' }, resume: { type: 'boolean' }, replan: { type: 'boolean' }, 'plan-only': { type: 'boolean' }, 'stop-after': { type: 'string' }
+    resume: { type: 'boolean' }, replan: { type: 'boolean' }, 'plan-only': { type: 'boolean' }, 'stop-after': { type: 'string' }
   } });
   [command, target] = parsed.positionals;
   options = parsed.values;
   const allowed = { doctor: ['project'], validate: ['project', 'static', 'build', 'agent-fast'],
-    'review-harness': [], develop: ['project', 'dry-run', 'task', 'resume', 'replan', 'plan-only', 'stop-after'], 'setup-runtime': ['project', 'accept-eula', 'players'],
+    'review-harness': [], develop: ['project', 'dry-run', 'resume', 'replan', 'plan-only', 'stop-after'], 'setup-runtime': ['project', 'accept-eula', 'players'],
     create: ['harness-ref', 'harness-url'] };
   if (!Object.hasOwn(allowed, command) || Object.keys(options).some(key => !allowed[command].includes(key)) ||
       parsed.positionals.length !== (command === 'create' ? 2 : 1) ||
@@ -33,12 +34,11 @@ try {
       parsed.tokens.filter(token => token.kind === 'option' && token.name === 'players').length > 1 ||
       (options.players !== undefined && (!/^[1-9]\d*$/.test(options.players) || !Number.isSafeInteger(Number(options.players))))) throw new Error('Invalid arguments');
   flags = Object.keys(options).filter(key => options[key] === true).map(key => '--' + key);
-  if ((options.resume && (options.task || options['dry-run'])) || (options.replan && !options.resume) ||
-      ((options['plan-only'] || options['stop-after']) && !options.task && !options.resume)) throw new Error('Checkpoint options require --task or --resume; --replan requires --resume');
+  if (options.resume && options['dry-run']) throw new Error('--resume cannot be combined with --dry-run');
   root = command === 'review-harness' ? harnessRoot : path.resolve(options.project || process.cwd());
 } catch (error) { argumentError = error; }
 if (argumentError) {
-  console.error(`${argumentError.message}\nUsage: node .harness/cli.mjs doctor | validate [--static|--build|--agent-fast] | develop [--task spec/tasks/TASK.md [--plan-only|--dry-run] [--stop-after M01] | --resume [--replan]] | setup-runtime [--accept-eula] [--players=N] [--project PATH]\n       node cli.mjs review-harness | create TARGET [--harness-ref TAG_OR_SHA] [--harness-url URL]`);
+  console.error(`${argumentError.message}\nUsage: node .harness/cli.mjs doctor | validate [--static|--build|--agent-fast] | develop [--plan-only|--dry-run|--replan|--resume|--stop-after M01] | setup-runtime [--accept-eula] [--players=N] [--project PATH]\n       node cli.mjs review-harness | create TARGET [--harness-ref TAG_OR_SHA] [--harness-url URL]`);
   process.exitCode = 2;
 } else if (command === 'create') {
   try {
@@ -49,7 +49,7 @@ if (argumentError) {
 } else {
   const playerCount = Number(options.players || 1);
   const id = `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}`;
-  const checkpoint = command === 'develop' && (options.task || options.resume);
+  const checkpoint = command === 'develop';
   let dir = command === 'validate' && flags.includes('--agent-fast') && process.env.HARNESS_AGENT_FAST_DIR
     ? path.resolve(process.env.HARNESS_AGENT_FAST_DIR)
     : path.join(root, '.harness-artifacts', checkpoint ? 'checkpoints' : command === 'review-harness' ? 'harness-review' : command, id);
@@ -57,7 +57,13 @@ if (argumentError) {
   let lock;
   const lockPath = path.join(root, '.harness-artifacts/develop.lock');
   try {
-    if (options.resume) dir = await resumeDirectory(root);
+    let restartForSpecChange = false;
+    if (options.resume) {
+      const savedDir = await resumeDirectory(root);
+      const saved = JSON.parse(await readFile(path.join(savedDir, 'state.json'), 'utf8'));
+      restartForSpecChange = !!(options.replan && saved.modelHash && projectHash(await readFile(path.join(root, 'spec/PROJECT.md'), 'utf8')) !== saved.specHash);
+      if (!restartForSpecChange) dir = savedDir;
+    }
     const config = await loadConfig();
     if (command === 'setup-runtime') {
       lock = await open(lockPath, 'wx'); await lock.writeFile(JSON.stringify({ pid: process.pid, dir }));
@@ -68,6 +74,7 @@ if (argumentError) {
       process.exitCode = result.ok ? 0 : 1;
     } else if (command === 'validate') {
       await validate(root, run, dir, { stage: flags.includes('--static') ? 'static' : flags.includes('--build') ? 'build' : 'compile', requireReady: flags.includes('--agent-fast'), agentFast: flags.includes('--agent-fast'),
+        model: flags.includes('--agent-fast') ? await readProjectModel(process.env.HARNESS_PROJECT_MODEL_PATH, root) : undefined,
         criteria: flags.includes('--agent-fast') && process.env.HARNESS_VERIFY_CRITERIA ? JSON.parse(process.env.HARNESS_VERIFY_CRITERIA) : undefined });
       console.log('Validation passed');
     } else if (command === 'review-harness') {
@@ -87,11 +94,11 @@ if (argumentError) {
       const interrupt = () => { interrupted = true; };
       process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt);
       try {
-        const result = await checkpointDevelopment(root, run, config, dir, { task: options.task, resume: options.resume, replan: options.replan,
+        const result = await checkpointDevelopment(root, run, config, dir, { resume: options.resume && !restartForSpecChange, replan: options.replan && !restartForSpecChange,
           planOnly: options['plan-only'], dryRun: options['dry-run'], stopAfter: options['stop-after'], interrupted: () => interrupted });
-        console.log(JSON.stringify({ status: result.status, simulated: result.simulated, taskId: result.taskId, currentMilestone: result.currentMilestone,
+        console.log(JSON.stringify({ status: result.status, simulated: result.simulated, projectId: result.projectId, currentMilestone: result.currentMilestone,
           completedMilestones: result.completedMilestones ?? Object.entries(result.milestones ?? {}).filter(([, value]) => value.status === 'committed').map(([id, value]) => ({ id, commit: value.commit })),
-          failureStage: result.failureStage, error: result.error, recommendedAction: result.recommendedAction, evidence: dir }, null, 2));
+          failureStage: result.failureStage, error: result.error, questions: result.questions, recommendedAction: result.recommendedAction, evidence: dir }, null, 2));
         process.exitCode = ['complete', 'planned', 'stopped'].includes(result.status) ? 0 : 1;
       } finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); }
     } else if (flags.includes('--dry-run')) {

@@ -1,14 +1,15 @@
-# Harness architecture
+# Harnessの構造
 
 Node >=20のES modulesと標準libraryを使う。外部dependencyはMC Pilotだけで、lockfileを固定する。agent framework、daemon、database、semantic memory、独自MCPはない。
 
-| File | Responsibility |
+| File | 役割 |
 | --- | --- |
 | cli.mjs | command dispatch、実processへの接続、run artifacts、develop lock |
 | lib/workflow.mjs | boundedな状態遷移。real/dry-run/testで同じengine |
 | lib/develop.mjs | 既存candidate pipelineの実tool接続。通常developとmilestone/final regressionで共有 |
 | lib/checkpoints.mjs | Work Plan、milestone順次実行、resume/replan、atomic state、最終regression |
-| lib/work-plan.mjs | task入力、schema相当の厳密検証、AC割当、milestone context |
+| lib/project-model.mjs | PROJECT.md由来の単一派生モデル、原文引用、ID、依存、ハッシュ検査 |
+| lib/work-plan.mjs | 派生モデルからの計画入力、AC割当、milestone context |
 | lib/checkpoint-git.mjs | source/JAR/index fingerprint、stage/commit境界、commit chain検証。remote操作なし |
 | lib/process.mjs | shellなしsubprocess、timeout/output制限、終了処理、OS別Gradle wrapper |
 | lib/repository.mjs | config、git/file hash、artifact、単純な変更分類表 |
@@ -23,7 +24,7 @@ Codexのnamed filesystem profileはrepositoryをread-onlyとし、[repository.mj
 
 hash照合はGitが列挙するfileとsubmoduleのindex pointer・HEAD・内部worktreeが対象であり、gitignoreされたruntimeやdependencyは含まない。sandboxはCodexの実行に適用し、後続のGradle/test/scenario codeを隔離するものではないため、それらもreview対象とする。
 
-artifactは `.harness-artifacts/<command>/<run-id>/`。開始hash、既存変更一覧、candidate差分、validation summary、Gradle log、structured review、runtime log抜粋、E2E結果、必要画像、最終summaryを置く。通常developはcommitしない。明示的なcheckpoint taskでは [checkpoint workflow](CHECKPOINT_WORKFLOW.md) のgate後にHarnessだけがlocal commitする。raw authentication resultは保存せず、API key系環境変数をagent子processから除外する。artifactも外部共有前に確認する。
+artifactは `.harness-artifacts/<command>/<run-id>/`。通常developもPROJECT.mdからcheckpointを作り、仕様コンパイル後の `project-model.json` とstate/Plan、各検証結果を置く。派生モデルはPROJECT.mdのSHA-256に結び付き、resumeで再照合する。生成物はGitに入れず、仕様の権威を持たない。各gate後の検証済み候補だけHarnessがローカルcommitする。raw authentication resultは保存せず、API key系環境変数をagent子processから除外する。artifactも外部共有前に確認する。
 
 レビューsource snapshotは上限800 KB。上限超過時はscopeを絞り、巨大dumpを黙って送らない。spec prompt上限30,000文字、diff上限60,000文字で切り詰めを明示し、untracked filesもmanifestに列挙する。snapshot sourceは変更せずコピーし、process/log出力だけをredactする。画像reviewには承認済みvisual要件・関連ACの本文とリンクされたspec/referencesの資料、必要な画像のみを渡し、sourceは含めない。LLM間で会話履歴やgenerated outputを送り直さない。deterministic resultをAIの主観で上書きしない。
 
@@ -31,11 +32,11 @@ MC Pilot 0.16.0のschema/info/searchでcommandを検証した。CLIは別process
 
 `develop --dry-run` は副作用をmockにした同じengineでcode指摘→修正→再レビュー→build→GameTest skip→1bootでbatch→visual指摘→修正→resource reload→再レビューまで進む。これは実agent/runtime試験とは区別して `simulated: true` を保存する。
 
-`lib/coverage.mjs` はMarkdown Verification表とtest/scenarioの参照を逆引きし、起動前に全required ACへの割当を確認する。検証用Modの専用runnerは本体の外に置き、共通moduleを呼ぶ。本体は検証用Modをimportせず、Mod固有のID・AC・resource path・例外commandを持たない。共通self-testも特定Modや仕様記入例に依存させない。新しいagent frameworkやDSLは追加しない。
+`lib/coverage.mjs` は派生モデルとtest/scenarioの参照を逆引きし、起動前に全required ACへの割当を確認する。検証用Modの専用runnerは本体の外に置き、共通moduleを呼ぶ。本体は検証用Modをimportせず、Mod固有のID・AC・resource path・例外commandを持たない。共通self-testも特定Modや仕様記入例に依存させない。新しいagent frameworkやDSLは追加しない。
 
 `setup-runtime` は公式installerでexact NeoForge21.1.252を導入し、MC Pilot固有のinstance metadata更新をadapter内で完結する。EULAは明示flagまたは専用eula.txtによる本人同意のみ。setup/developは共通lockを使用する。同じruntimeを使う検証用projectのrunnerもこのlockを取得する。runtime準備、GameTest、client bootsを別々に記録し、prepare/mockの結果を実機passに昇格しない。
 
-## Roots and bootstrap
+## rootと初期作成
 
 `lib/paths.mjs` はmodule URLからharness rootを求める。CLIはcwdまたは `--project` をproject rootに渡す。config/prompts/schema/docs/Node dependencies/self-testsはharnessから、Gradle/spec/source/scenario/artifactsはprojectから読む。review-harnessはharness保守commandとしてharness rootを対象にする。
 

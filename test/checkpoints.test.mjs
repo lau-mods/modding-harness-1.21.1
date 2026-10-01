@@ -6,7 +6,8 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, chmod } from 'node:fs/promises
 import { projectFixture } from './fixtures.mjs';
 import { run, requireSuccess } from '../lib/process.mjs';
 import { harnessRoot } from '../lib/paths.mjs';
-import { taskContext, singleMilestonePlan, validatePlan, milestoneContext } from '../lib/work-plan.mjs';
+import { projectContext, singleMilestonePlan, validatePlan, milestoneContext } from '../lib/work-plan.mjs';
+import { projectHash } from '../lib/project-model.mjs';
 import { candidateFingerprint, assertCandidate, checkpointGit, head, assertHead } from '../lib/checkpoint-git.mjs';
 import { checkpointDevelopment } from '../lib/checkpoints.mjs';
 import { developWorkflow } from '../lib/workflow.mjs';
@@ -18,22 +19,19 @@ import { save } from '../lib/repository.mjs';
 const pass = { verdict: 'pass', findings: [], summary: 'Synthetic independent verdict' };
 const fail = { verdict: 'changes_required', findings: [{ severity: 'major', category: 'correctness', file: 'fixture', location: 'fixture', problem: 'Incomplete slice', required_change: 'Complete it', reason: 'AC not met' }], summary: 'Synthetic rejected verdict' };
 const config = { budgets: { codeReviews: 1, visualReviews: 1, gameBoots: 2 } };
-const task = 'spec/tasks/TASK-001.md';
 
 async function fixture(t, count = 2) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harness-checkpoint-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await projectFixture(root);
   await writeFile(path.join(root, '.gitignore'), '.harness-artifacts/\nbuild/\n');
-  await mkdir(path.join(root, 'spec/tasks'), { recursive: true });
-  const ids = ['AC-A', 'AC-B'].slice(0, count);
+  const ids = ['AC-001', 'AC-002'].slice(0, count);
   const spec = `Status: ready\n## Identity\nMod ID: test_input\n` +
     ['Purpose', 'Functional requirements'].map(name => `## ${name}\nSynthetic behavior.\n`).join('') +
     `## Acceptance criteria\n${ids.map(id => `- ${id}: Observable synthetic ${id} behavior.`).join('\n')}\n` +
     ['Visual requirements', 'Persistence', 'Multiplayer', 'Compatibility', 'Non-goals', 'Reference assets', 'Unresolved questions'].map(name => `## ${name}\nNone.\n`).join('') +
     `## Verification\n| AC | Method | Evidence |\n| --- | --- | --- |\n${ids.map(id => `| ${id} | static | src/main/resources/${id}.json |`).join('\n')}\n`;
   await writeFile(path.join(root, 'spec/PROJECT.md'), spec);
-  await writeFile(path.join(root, task), `## Goal\nComplete the synthetic behavior.\n## Included Acceptance Criteria\n${ids.map(id => '- ' + id).join('\n')}\n## Constraints\nNo version changes.\n## Non-goals\nNo invented future infrastructure.\n`);
   for (const [key, value] of [['user.name', 'Fixture'], ['user.email', 'fixture@example.invalid']]) requireSuccess(await run('git', ['config', key, value], { cwd: root }), 'fixture identity');
   requireSuccess(await run('git', ['add', '.'], { cwd: root }), 'fixture stage');
   requireSuccess(await run('git', ['commit', '-m', 'fixture baseline'], { cwd: root }), 'fixture commit');
@@ -43,16 +41,26 @@ async function fixture(t, count = 2) {
     calls.push({ command, args });
     return run(command, args, options);
   };
-  const context = { ...await taskContext(root, task), baseCommit: base };
+  const source = { section: 'Functional requirements', quote: 'Synthetic behavior.' };
+  const model = { version: 1, projectSourceHash: projectHash(spec), modId: 'test_input',
+    features: [{ id: 'FEAT-001', title: 'Synthetic behavior', purpose: source.quote, source }],
+    requirements: ids.map((id, index) => ({ id: `REQ-${String(index + 1).padStart(3, '0')}`, featureId: 'FEAT-001',
+      text: `Observable synthetic ${id} behavior.`, source: { section: 'Acceptance criteria', quote: `- ${id}: Observable synthetic ${id} behavior.` } })),
+    acceptanceCriteria: ids.map((id, index) => ({ id, requirementId: `REQ-${String(index + 1).padStart(3, '0')}`,
+      text: `Observable synthetic ${id} behavior.`, source: { section: 'Acceptance criteria', quote: `- ${id}: Observable synthetic ${id} behavior.` },
+      verification: [{ method: 'static', evidence: `src/main/resources/${id}.json` }] })),
+    constraints: [], nonGoals: [], visualRequirements: [], persistenceRequirements: [], multiplayerRequirements: [], references: [], dependencies: [], openQuestions: [], retiredIds: [] };
+  const context = projectContext(spec, model, base);
   const plan = singleMilestonePlan(context);
   plan.milestones = ids.map((id, index) => ({ ...structuredClone(plan.milestones[0]), id: `M0${index + 1}`, acceptanceCriteria: [id], title: `Complete ${id}`, goal: `Observable ${id}`, dependsOn: index ? ['M01'] : [], commitMessage: `feat: complete ${id}` }));
   const dir = path.join(root, '.harness-artifacts/checkpoints/test-run');
-  const invocations = [], behavior = {};
+  const invocations = [], repairs = [], behavior = {};
   const services = {
-    plan: async () => structuredClone(plan), reviewPlan: async () => pass,
+    compile: async () => structuredClone(model), plan: async () => structuredClone(plan), reviewPlan: async () => pass,
     async develop(destination, settings) {
       const id = settings.milestone?.id ?? 'final';
       invocations.push(id);
+      if (settings.repair) repairs.push({ id, ...settings.repair });
       const startHead = await head(root, runner);
       let candidate;
       const actions = {
@@ -83,12 +91,12 @@ async function fixture(t, count = 2) {
       return { ...result, candidate };
     }
   };
-  return { root, dir, base, runner, context, plan, services, calls, invocations, behavior,
-    execute: options => checkpointDevelopment(root, runner, config, dir, { task, ...options }, services),
+  return { root, dir, base, runner, context, plan, services, calls, invocations, repairs, behavior,
+    execute: options => checkpointDevelopment(root, runner, config, dir, options, services),
     resume: options => checkpointDevelopment(root, runner, config, dir, { resume: true, ...options }, services) };
 }
 
-for (const count of [1, 2]) test(`${count} milestone task creates real verified commits then final regression without publish`, async t => {
+for (const count of [1, 2]) test(`${count} PROJECT milestone creates verified commits then final regression without publish`, async t => {
   const f = await fixture(t, count);
   const result = await f.execute();
   assert.equal(result.status, 'complete', result.error);
@@ -127,6 +135,8 @@ test('M02 failure preserves M01 and resumes exactly M02 with its uncommitted can
   assert.equal(resumed.status, 'complete', resumed.error);
   assert.equal(resumed.milestones.M01.commit, first);
   assert.deepEqual(f.invocations, ['M01', 'M02', 'M02', 'final']);
+  assert.equal(f.repairs[0].id, 'M02');
+  assert.match(f.repairs[0].evidence, /M02\/attempt-1/);
 });
 
 test('resume rejects HEAD mismatch and leaves saved state untouched', async t => {
@@ -138,7 +148,7 @@ test('resume rejects HEAD mismatch and leaves saved state untouched', async t =>
   assert.equal(await readFile(path.join(f.dir, 'state.json'), 'utf8'), before);
 });
 
-for (const file of ['spec/PROJECT.md', task, 'src/main/resources/AC-A.json']) test(`resume rejects edited ${file}`, async t => {
+for (const file of ['spec/PROJECT.md', 'src/main/resources/AC-001.json']) test(`resume rejects edited ${file}`, async t => {
   const f = await fixture(t); await f.execute({ stopAfter: 'M01' });
   await writeFile(path.join(f.root, file), (await readFile(path.join(f.root, file), 'utf8')) + '\nchanged');
   const result = await f.resume(); assert.equal(result.status, 'failed');
@@ -150,8 +160,8 @@ test('replan only changes remaining milestone definitions and requires a new rev
   const oldCommit = first.milestones.M01.commit;
   f.plan.milestones[0].goal = 'tampered completed goal';
   assert.match((await f.resume({ replan: true })).error, /immutable/);
-  f.plan.milestones[0].goal = 'Observable AC-A';
-  f.plan.milestones[1].goal = 'Revised but complete AC-B behavior';
+  f.plan.milestones[0].goal = 'Observable AC-001';
+  f.plan.milestones[1].goal = 'Revised but complete AC-002 behavior';
   let reviewed = false; f.services.reviewPlan = async (_context, proposal, completed) => {
     assert.equal(completed.length, 1); assert.equal(proposal.milestones[1].goal, f.plan.milestones[1].goal); reviewed = true; return pass;
   };
@@ -162,11 +172,11 @@ test('replan only changes remaining milestone definitions and requires a new rev
 
 test('schema, coverage, ordering and immutable plan hashes are checked deterministically', async t => {
   const f = await fixture(t);
-  for (const change of [plan => plan.milestones.pop(), plan => plan.milestones[1].dependsOn = ['M99'], plan => plan.milestones[1].acceptanceCriteria = ['AC-A'], plan => plan.milestones[0].unexpected = true]) {
+  for (const change of [plan => plan.milestones.pop(), plan => plan.milestones[1].dependsOn = ['M99'], plan => plan.milestones[1].acceptanceCriteria = ['AC-001'], plan => plan.milestones[0].unexpected = true]) {
     const bad = structuredClone(f.plan); change(bad); assert.throws(() => validatePlan(bad, f.context));
   }
   const result = await f.execute({ planOnly: true }); assert.equal(result.status, 'planned');
-  const planFile = path.join(f.dir, result.planFile); await writeFile(planFile, JSON.stringify({ ...f.plan, taskId: 'changed' }));
+  const planFile = path.join(f.dir, result.planFile); await writeFile(planFile, JSON.stringify({ ...f.plan, projectId: 'changed' }));
   assert.match((await f.resume()).error, /Plan hash mismatch/);
 });
 
@@ -193,7 +203,7 @@ test('stop-after commits the named milestone and pauses before the next', async 
 test('dry-run invokes no external AI, Gradle, Minecraft or commit and is explicitly simulated', async t => {
   const f = await fixture(t, 1);
   const dryConfig = { budgets: { codeReviews: 3, visualReviews: 2, gameBoots: 3 } };
-  const result = await checkpointDevelopment(f.root, f.runner, dryConfig, f.dir, { task, dryRun: true }, {
+  const result = await checkpointDevelopment(f.root, f.runner, dryConfig, f.dir, { dryRun: true }, {
     plan: () => assert.fail('planner'), reviewPlan: () => assert.fail('review'), develop: () => assert.fail('runtime') });
   assert.equal(result.status, 'complete', result.error); assert.equal(result.simulated, true);
   assert.equal(await head(f.root, run), f.base);
@@ -213,7 +223,7 @@ test('static coverage never imports an unreviewed scenario', async t => {
   await mkdir(path.join(f.root, 'tests/e2e/scenarios'), { recursive: true });
   await writeFile(path.join(f.root, 'tests/e2e/scenarios/unsafe.scenario.mjs'), 'throw new Error("Unreviewed code executed");');
   const specFile = path.join(f.root, 'spec/PROJECT.md');
-  await writeFile(specFile, (await readFile(specFile, 'utf8')).replace('static | src/main/resources/AC-A.json', 'e2e | unsafe'));
+  await writeFile(specFile, (await readFile(specFile, 'utf8')).replace('static | src/main/resources/AC-001.json', 'e2e | unsafe'));
   assert.equal((await acceptanceCoverage(f.root, f.dir, { reviewed: false })).status, 'references-pending-review');
   await assert.rejects(acceptanceCoverage(f.root, f.dir), /Unreviewed code executed/);
 });
@@ -227,21 +237,21 @@ test('scenario selection unions required evidence, smoke and affected regression
 
 test('automatic regression waits for future milestone ACs while required evidence and smoke remain mandatory', () => {
   const scenarios = [
-    { id: 'current', acceptanceCriteria: ['AC-A'] },
-    { id: 'future', acceptanceCriteria: ['AC-B'] },
-    { id: 'cross-feature', acceptanceCriteria: ['AC-A', 'AC-B'] },
-    { id: 'smoke', acceptanceCriteria: ['AC-A'], alwaysRun: true }
+    { id: 'current', acceptanceCriteria: ['AC-001'] },
+    { id: 'future', acceptanceCriteria: ['AC-002'] },
+    { id: 'cross-feature', acceptanceCriteria: ['AC-001', 'AC-002'] },
+    { id: 'smoke', acceptanceCriteria: ['AC-001'], alwaysRun: true }
   ];
-  assert.deepEqual(selectScenarios(scenarios, [], ['src/main/java/A.java'], { runtimeChanged: true, criteria: ['AC-A'] }).map(s => s.id), ['current', 'smoke']);
-  assert.deepEqual(selectScenarios(scenarios, [], [], { fullRegression: true, criteria: ['AC-A', 'AC-B'] }).map(s => s.id), scenarios.map(s => s.id));
-  assert.ok(selectScenarios(scenarios, [{ method: 'e2e', evidence: 'cross-feature' }], [], { criteria: ['AC-A'] }).some(s => s.id === 'cross-feature'));
+  assert.deepEqual(selectScenarios(scenarios, [], ['src/main/java/A.java'], { runtimeChanged: true, criteria: ['AC-001'] }).map(s => s.id), ['current', 'smoke']);
+  assert.deepEqual(selectScenarios(scenarios, [], [], { fullRegression: true, criteria: ['AC-001', 'AC-002'] }).map(s => s.id), scenarios.map(s => s.id));
+  assert.ok(selectScenarios(scenarios, [{ method: 'e2e', evidence: 'cross-feature' }], [], { criteria: ['AC-001'] }).some(s => s.id === 'cross-feature'));
 });
 
 test('milestone prompt carries only current slice and repair findings, not future context', async t => {
   const f = await fixture(t);
   const current = milestoneContext(f.context, f.plan.milestones[0]);
   const prompt = implementationPrompt(f.context.specText, { milestone: current, repair: true, findings: ['current failure'] });
-  assert.match(prompt, /AC-A/); assert.doesNotMatch(prompt, /AC-B/); assert.match(prompt, /Excluded scope/); assert.match(prompt, /Findings\/errors:.*current failure/);
+  assert.match(prompt, /AC-001/); assert.doesNotMatch(prompt, /AC-002/); assert.match(prompt, /Excluded scope/); assert.match(prompt, /Findings\/errors:.*current failure/);
   assert.match(prompt, /spec\/\*\*.*read-only/);
 });
 
@@ -269,7 +279,7 @@ for (const when of ['before', 'after']) test(`resume recovers durable intent whe
     }
     return f.runner(command, args, options);
   };
-  assert.equal((await checkpointDevelopment(f.root, runner, config, f.dir, { task }, f.services)).status, 'failed');
+  assert.equal((await checkpointDevelopment(f.root, runner, config, f.dir, {}, f.services)).status, 'failed');
   const saved = JSON.parse(await readFile(path.join(f.dir, 'state.json'), 'utf8'));
   assert.ok(saved.pending);
   const result = await f.resume();
@@ -315,8 +325,8 @@ test('shared real development actions repair visual findings through resource re
   const f = await fixture(t, 1);
   await mkdir(path.join(f.root, 'tests/e2e/scenarios'), { recursive: true });
   await mkdir(path.join(f.root, 'src/main/resources'), { recursive: true });
-  await writeFile(path.join(f.root, 'src/main/resources/AC-A.json'), '{}');
-  await writeFile(path.join(f.root, 'tests/e2e/scenarios/fixture.scenario.mjs'), `export default {id:'fixture',acceptanceCriteria:['AC-A'],visual:true,async setup(){},async actions(){},async assertions(){},async cleanup(){},screenshots:[{id:'point',criteria:['synthetic'],async prepare(){},async assertState(){}}]};`);
+  await writeFile(path.join(f.root, 'src/main/resources/AC-001.json'), '{}');
+  await writeFile(path.join(f.root, 'tests/e2e/scenarios/fixture.scenario.mjs'), `export default {id:'fixture',acceptanceCriteria:['AC-001'],visual:true,async setup(){},async actions(){},async assertions(){},async cleanup(){},screenshots:[{id:'point',criteria:['synthetic'],async prepare(){},async assertState(){}}]};`);
   requireSuccess(await run('git', ['add', 'src', 'tests'], { cwd: f.root }), 'fixture scenarios');
   requireSuccess(await run('git', ['commit', '-m', 'fixture scenario baseline'], { cwd: f.root }), 'fixture scenario commit');
   let implementations = 0, visuals = 0, reloads = 0, starts = 0;
@@ -342,7 +352,7 @@ test('shared real development actions repair visual findings through resource re
       async batch() { return { screenshots: [{ file: 'synthetic.png' }] }; } })
   };
   const result = await runDevelopment(f.root, runner, { budgets: { codeReviews: 3, visualReviews: 2, gameBoots: 3 }, gameTest: 'auto' }, f.dir,
-    { checkpoint: true, milestone: f.plan.milestones[0], context: milestoneContext(f.context, f.plan.milestones[0]), criteria: ['AC-A'] }, services);
+    { checkpoint: true, milestone: f.plan.milestones[0], context: milestoneContext(f.context, f.plan.milestones[0]), criteria: ['AC-001'] }, services);
   assert.equal(result.status, 'pass', result.error);
   assert.equal(implementations, 2); assert.equal(reloads, 1); assert.equal(starts, 1);
   assert.ok(result.candidate.jar.sha256);
@@ -351,11 +361,11 @@ test('shared real development actions repair visual findings through resource re
 test('checkpoint CLI validates combinations and supports a real no-external dry-run', async t => {
   const f = await fixture(t, 1);
   const cli = path.join(harnessRoot, 'cli.mjs');
-  for (const args of [['--replan'], ['--plan-only'], ['--resume', '--dry-run'], ['--task', task, '--resume']]) {
+  for (const args of [['--resume', '--dry-run'], ['--task', 'spec/tasks/TASK-001.md']]) {
     assert.equal((await run(process.execPath, [cli, 'develop', ...args], { cwd: f.root })).code, 2);
   }
-  const result = await run(process.execPath, [cli, 'develop', '--task', task, '--dry-run'], { cwd: f.root });
-  assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /"simulated": true/);
+  const projectOnly = await run(process.execPath, [cli, 'develop', '--dry-run'], { cwd: f.root });
+  assert.equal(projectOnly.code, 0, projectOnly.stderr); assert.match(projectOnly.stdout, /"simulated": true/);
   assert.equal(await head(f.root, run), f.base);
 });
 
@@ -363,12 +373,12 @@ for (const method of ['e2e', 'visual', 'persistence', 'multiplayer', 'gametest']
   const f = await fixture(t, 1);
   const evidence = method === 'gametest' ? 'src/main/java/FixtureTests.java' : method === 'visual' ? 'required/point' : 'required';
   const specFile = path.join(f.root, 'spec/PROJECT.md');
-  await writeFile(specFile, (await readFile(specFile, 'utf8')).replace('static | src/main/resources/AC-A.json', `${method} | ${evidence}`));
+  await writeFile(specFile, (await readFile(specFile, 'utf8')).replace('static | src/main/resources/AC-001.json', `${method} | ${evidence}`));
   await mkdir(path.join(f.root, 'src/main/java'), { recursive: true });
   if (method === 'gametest') await writeFile(path.join(f.root, evidence), '@GameTest void fixture() {}');
   else {
     await mkdir(path.join(f.root, 'tests/e2e/scenarios'), { recursive: true });
-    await writeFile(path.join(f.root, 'tests/e2e/scenarios/required.scenario.mjs'), `export default {id:'required',acceptanceCriteria:['AC-A'],visual:${method === 'visual'},
+    await writeFile(path.join(f.root, 'tests/e2e/scenarios/required.scenario.mjs'), `export default {id:'required',acceptanceCriteria:['AC-001'],visual:${method === 'visual'},
       ${method === 'persistence' ? "phase:'after-restart'," : ''}${method === 'multiplayer' ? "players:2,verification:['multiplayer']," : ''}
       async setup(){},async actions(){},async assertions(){},async cleanup(){},screenshots:${method === 'visual' ? "[{id:'point',criteria:['synthetic'],async prepare(){},async assertState(){}}]" : '[]'}};`);
   }
@@ -406,7 +416,7 @@ test('schema used by the real planner omits provider-unsupported uniqueness but 
   const schema = await readFile(path.join(harnessRoot, 'schemas/work-plan.schema.json'), 'utf8');
   assert.doesNotMatch(schema, /uniqueItems/);
   const f = await fixture(t, 1);
-  f.plan.milestones[0].acceptanceCriteria.push('AC-A');
+  f.plan.milestones[0].acceptanceCriteria.push('AC-001');
   assert.throws(() => validatePlan(f.plan, f.context), /array/);
 });
 
@@ -448,7 +458,7 @@ test('completed runs resume without repeating regression but still reject change
   assert.equal(await readFile(path.join(f.dir, 'state.json'), 'utf8'), completed);
   assert.equal((await f.resume()).status, 'complete');
   assert.deepEqual(f.invocations, ['M01', 'final']);
-  await writeFile(path.join(f.root, 'src/main/resources/AC-A.json'), '{"changed":true}');
+  await writeFile(path.join(f.root, 'src/main/resources/AC-001.json'), '{"changed":true}');
   assert.equal((await f.resume()).status, 'failed');
   assert.deepEqual(f.invocations, ['M01', 'final']);
 });

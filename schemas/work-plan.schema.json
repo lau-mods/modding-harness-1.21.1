@@ -3,10 +3,10 @@
   "additionalProperties": false,
   "required": [
     "version",
-    "taskId",
+    "projectId",
     "baseCommit",
     "specHash",
-    "taskHash",
+    "modelHash",
     "milestones"
   ],
   "properties": {
@@ -14,7 +14,7 @@
       "type": "integer",
       "const": 1
     },
-    "taskId": {
+    "projectId": {
       "type": "string",
       "minLength": 1,
       "maxLength": 4000
@@ -29,7 +29,7 @@
       "minLength": 1,
       "maxLength": 4000
     },
-    "taskHash": {
+    "modelHash": {
       "type": "string",
       "minLength": 1,
       "maxLength": 4000
